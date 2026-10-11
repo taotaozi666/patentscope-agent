@@ -1,0 +1,35 @@
+[project]
+name = "patentscope-agent"
+version = "0.1.0"
+description = "LangChain and Chroma RAG chat"
+readme = "README.md"
+authors = [
+    { name = "zt", email = "taotaozi2023@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "streamlit>=1.40", 
+    "openai>=1.0", 
+    "python-dotenv>=1.0",
+    "langchain-core>=1.0,<2",
+    "langchain-text-splitters>=1.0,<2",
+    "langchain-chroma>=1.0,<2"
+]
+
+[project.scripts]
+patentscope-agent = "app.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.10,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "app"
+module-root = ""
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.12"
+typeCheckingMode = "basic"
+include = ["app", "frontend", "tests"]

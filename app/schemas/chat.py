@@ -1,0 +1,13 @@
+"""聊天消息数据结构，不包含历史管理业务。"""
+
+from typing import Literal, NotRequired, TypedDict
+
+from app.schemas.knowledge import Hit
+
+
+class ChatMessage(TypedDict):
+    """一条聊天记录，助手消息可以携带检索来源。"""
+
+    role: Literal["user", "assistant"]
+    content: str
+    hits: NotRequired[list[Hit]]
