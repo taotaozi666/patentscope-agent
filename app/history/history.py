@@ -23,6 +23,8 @@ class ChatHistory:
         copied: ChatMessage = {"role": message["role"], "content": message["content"]}
         if "hits" in message:
             copied["hits"] = list(message["hits"])
+        if "retrieval" in message:
+            copied["retrieval"] = message["retrieval"]
         return copied
 
     def __len__(self) -> int:
@@ -32,11 +34,16 @@ class ChatHistory:
         """返回消息列表副本，供页面展示，避免外部直接修改内部列表。"""
         return [self._copy(message) for message in self._messages]
 
-    def add_turn(self, question: str, reply: str, hits: Sequence[Hit] = ()) -> None:
+    def add_turn(
+        self, question: str, reply: str, hits: Sequence[Hit] = (), *, retrieval: bool = True
+    ) -> None:
         """成功得到回答后一次性保存一轮对话，失败时调用方不执行此方法。"""
+        user: ChatMessage = {"role": "user", "content": question}
+        if not retrieval:
+            user["retrieval"] = False
         self._messages.extend(
             [
-                {"role": "user", "content": question},
+                user,
                 {"role": "assistant", "content": reply, "hits": list(hits)},
             ]
         )
@@ -45,13 +52,13 @@ class ChatHistory:
         self._messages.clear()
 
     def recent_questions(self, limit: int = 2) -> list[str]:
-        """按原始顺序提取最近的用户问题，非正数返回空列表。"""
+        """提取最近参与知识库检索的用户问题，直接交流不进入检索上下文。"""
         if limit <= 0:
             return []
         return [
             message["content"]
             for message in self._messages
-            if message["role"] == "user"
+            if message["role"] == "user" and message.get("retrieval", True)
         ][-limit:]
 
     def retrieval_question(self, question: str) -> str:

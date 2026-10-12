@@ -1,4 +1,4 @@
-"""Chroma 知识库聊天页面，配置由服务端统一读取。"""
+"""Chroma 知识库问答页面，配置由服务端统一读取。"""
 
 import logging
 import sys
@@ -8,27 +8,34 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import streamlit as st
 
-from app.conf.config import get_settings
-from app.embeddings import create_embeddings
+from app.config import get_settings
+from app.rag.embeddings import create_embeddings
 from app.history import get_session_history
 from app.models import create_client
-from app.rag import RAGService, answer
-from app.trace import print_step, trace_operation
+from app.rag import RAGService, answer, direct_reply
+from app.trace import configure_logging, debug_step, print_step, trace_operation
 from frontend.chat_components import render_message
 from frontend.ingestion_page import render_ingestion_page
 from frontend.knowledge_page import render_knowledge_page
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("frontend.ui")
 # 每次页面重新执行都会读取最新配置，密钥不进入页面控件。
 settings = get_settings()
+configure_logging(settings.log_level)
 history = get_session_history(st.session_state)
+if st.session_state.get("current_page") == "聊天":
+    st.session_state.current_page = "知识库问答"
 
 
-st.set_page_config(page_title="RAG 知识库聊天", page_icon="📚")
-page = st.sidebar.radio(
-    "页面", ["聊天", "知识库查询", "导入任务"], key="current_page"
+st.set_page_config(
+    page_title="RAG 知识库问答",
+    page_icon="📚",
+    layout="wide" if st.session_state.get("current_page") == "知识库查询" else "centered",
 )
-st.title({"聊天": "📚 RAG 知识库聊天", "知识库查询": "📋 知识库查询", "导入任务": "📥 文档导入任务"}[page])
+page = st.sidebar.radio(
+    "页面", ["知识库问答", "知识库查询", "导入任务"], key="current_page"
+)
+st.title({"知识库问答": "📚 RAG 知识库问答", "知识库查询": "📋 知识库查询", "导入任务": "📥 文档导入任务"}[page])
 st.caption("上传文档后提问。知识库由 Chroma 保存到本地，聊天记录保存在当前会话内存。")
 
 with st.sidebar:
@@ -39,7 +46,7 @@ with st.sidebar:
         index=1 if settings.api_key else 0,
     )
     top_k = st.slider("检索片段数", 1, 8, 3)
-    st.caption("语义检索和回答生成使用千问服务，相关资料和最近聊天会发送给模型服务。")
+    st.caption("语义检索和回答生成使用已配置的模型服务，相关资料和最近聊天会发送给该服务。")
     st.caption("同一检索模型的本地知识库由各会话共享；清空只作用于当前模型的集合。")
 
 backend_config = (
@@ -84,13 +91,13 @@ with st.sidebar:
         except Exception as exc:
             logger.exception("导入示例失败")
             st.error(f"示例导入失败：{exc}")
-    st.write(f"知识库：{rag.store.stats().chunks} 个片段")
+    st.write(f"知识库：{rag.store.count()} 个片段")
     if st.button("清空聊天"):
         history.clear()
         st.rerun()
     if st.button("清空知识库和聊天"):
         rag.store.clear()
-        print_step("清空知识库", 当前片段数=rag.store.stats().chunks)
+        print_step("清空知识库", 当前片段数=rag.store.count())
         history.clear()
         st.rerun()
 
@@ -104,52 +111,52 @@ if page == "导入任务":
     st.stop()
 
 if not settings.api_key:
-    st.info("当前为演示模式，回答展示检索原文。")
+    st.info("当前为演示模式，知识库问题展示检索原文；问候和助手介绍可直接回答。")
 for message in history.messages():
     render_message(message["role"], message["content"], message.get("hits", []))
 
-if question := st.chat_input("输入问题", disabled=not rag.store.stats().chunks):
-    with trace_operation("聊天", 问题=question, 检索模式=backend):
+if question := st.chat_input("围绕已导入文档提问"):
+    with trace_operation("聊天", 问题字符数=len(question), 检索模式=backend):
+        debug_step("用户问题", lambda: {"问题": question})
         render_message("user", question)
+        client = None
         try:
-            with st.spinner("正在检索知识库…"):
-                hits = rag.search(question, top_k)
-                retrieval_question = history.retrieval_question(question)
-                if retrieval_question != question:
-                    print_step(
-                        "追问流转",
-                        最近问题=history.recent_questions(),
-                        新检索问题=retrieval_question,
-                    )
+            reply = direct_reply(question)
+            retrieval = reply is None
+            hits = []
+            print_step("问题处理", 处理方式="知识库检索" if retrieval else "固定说明")
+            if reply is None:
+                with st.spinner("正在检索知识库…"):
+                    retrieval_question = history.retrieval_question(question)
+                    if retrieval_question != question:
+                        print_step(
+                            "追问流转",
+                            历史问题数=len(history.recent_questions()),
+                            检索问题字符数=len(retrieval_question),
+                        )
+                        debug_step("追问内容", lambda: {"最近问题": history.recent_questions(), "新检索问题": retrieval_question})
                     hits = rag.search(retrieval_question, top_k)
-            client = None
-            if settings.api_key:
-                client = create_client(settings)
-            try:
+                client = create_client(settings) if hits and settings.api_key else None
                 with st.spinner("正在生成回答…"):
-                    reply = answer(
-                        question,
-                        hits,
-                        history,
-                        client,
-                        settings.chat_model,
-                    )
-                render_message("assistant", reply, hits)
-            finally:
-                # 请求失败时也关闭客户端，释放网络连接。
-                if client:
-                    client.close()
-                    print_step("聊天客户端已关闭")
-            history.add_turn(question, reply, hits)
+                    reply = answer(question, hits, history, client, settings.chat_model)
+            else:
+                print_step("固定说明", 流转="跳过模型调用与知识库检索")
+            render_message("assistant", reply, hits)
+            history.add_turn(question, reply, hits, retrieval=retrieval)
             print_step(
                 "页面接收最终结果",
-                回答=reply,
+                回答字符数=len(reply),
                 来源数量=len(hits),
                 历史消息数=len(history),
             )
+            debug_step("完整回答", lambda: {"回答": reply})
         except Exception:
-            print_step("聊天异常", 结果="未保存本轮聊天，请查看服务端异常日志")
+            print_step("聊天异常", level=logging.ERROR, 结果="未保存本轮聊天，请查看服务端异常日志")
             logger.exception("生成知识库回答失败")
             st.error(
                 "回答未完成，本轮未保存。请重新发送问题；若持续失败，请联系管理员。"
             )
+        finally:
+            if client:
+                client.close()
+                print_step("聊天客户端已关闭")

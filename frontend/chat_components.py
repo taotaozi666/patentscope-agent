@@ -18,6 +18,7 @@ def render_sources(hits: list[Hit]) -> None:
     if not hits:
         return
     with st.expander("查看检索来源"):
+        st.caption("以下为检索候选片段；检索到片段不代表资料足以回答。答案中的引用编号表示使用的依据。")
         for i, hit in enumerate(hits, 1):
             st.write(f"[{i}] {hit.source} · 片段 {hit.chunk} · 相似度 {hit.score:.3f}")
             st.text(hit.text)

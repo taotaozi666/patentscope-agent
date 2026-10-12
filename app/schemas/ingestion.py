@@ -1,5 +1,3 @@
-"""后台文档导入任务状态及进度。"""
-
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal

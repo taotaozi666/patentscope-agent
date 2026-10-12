@@ -1,8 +1,8 @@
 import unittest
 
-from app.embeddings import DemoEmbedder
-from app.rag import RAGService, answer
-from app.splitters import split_into_chunks
+from app.rag.embeddings import DemoEmbedder
+from app.rag import RAGService, answer, direct_reply
+from app.rag.documents import split_into_chunks
 from app.storage import ChromaKnowledgeStore
 
 
@@ -12,6 +12,20 @@ def make_rag():
 
 
 class RAGTests(unittest.TestCase):
+    def test_direct_reply_recognizes_complete_greetings_and_introductions(self):
+        for question in ("你好，你是?", "您好！", "你是谁？", "你好，你能做什么？", "Hello!", "Who are you?"):
+            with self.subTest(question=question):
+                self.assertIsNotNone(direct_reply(question))
+
+    def test_document_questions_and_followups_are_not_intercepted(self):
+        for question in (
+            "你好，请介绍文档中的散热方法", "你是谁？文档里写了什么？",
+            "你能做什么样的散热设计？", "你好是什么意思？", "它有什么特点？",
+            "请总结刚才的资料", "hello.txt 写了什么？", "我是谁", "大熊在干嘛", " ",
+        ):
+            with self.subTest(question=question):
+                self.assertIsNone(direct_reply(question))
+
     def test_markdown_heading_attached_to_each_paragraph(self):
         text = "# 城市\n\n## 04．雨伞大学\n\n第一段正文。\n\n第二段正文。\n\n## 石头商店\n\n第三段正文。"
         self.assertEqual(

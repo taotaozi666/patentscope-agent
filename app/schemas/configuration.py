@@ -1,5 +1,3 @@
-"""配置数据模型，仅定义配置快照，不负责读取环境变量。"""
-
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -21,3 +19,4 @@ class Settings:
     ingestion_max_files: int = 20
     ingestion_max_file_bytes: int = 52_428_800
     ingestion_max_batch_bytes: int = 209_715_200
+    log_level: str = "INFO"

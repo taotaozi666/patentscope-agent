@@ -2,10 +2,18 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from app.conf.config import Config, get_settings
+from app.config import Config, get_settings
 
 
 class ConfigTests(unittest.TestCase):
+    def test_log_level_default_normalization_and_validation(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / ".env"
+            self.assertEqual(get_settings(path, {}).log_level, "INFO")
+            self.assertEqual(get_settings(path, {"LOG_LEVEL": "debug"}).log_level, "DEBUG")
+            with self.assertRaises(ValueError):
+                get_settings(path, {"LOG_LEVEL": "invalid"})
+
     def test_file_environment_and_reload(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / ".env"

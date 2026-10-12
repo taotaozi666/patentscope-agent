@@ -1,18 +1,19 @@
-"""验证千问请求和向量处理，全程使用模拟客户端。"""
+"""验证模型请求和向量处理，全程使用模拟客户端。"""
 
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from app.models import SemanticEmbedder, create_client
+from app.models import create_client
+from app.rag.embeddings import SemanticEmbedder
 from app.rag import answer
 from app.schemas import Hit, Settings
 
 
-class QwenTests(unittest.TestCase):
+class ModelTests(unittest.TestCase):
     def test_client_configuration(self):
         settings = Settings("test-key", "chat", "embedding", "https://example.com/v1")
-        with patch("app.models.OpenAI") as factory:
+        with patch("app.models.models.OpenAI") as factory:
             create_client(settings)
             factory.assert_called_once_with(
                 api_key="test-key",
@@ -37,11 +38,13 @@ class QwenTests(unittest.TestCase):
                 {"role": "assistant", "content": "上一答"},
             ],
             client,
-            "qwen-test",
+            "test-model",
         )
         self.assertEqual(reply, "回答[1]")
         request = client.chat.completions.create.call_args.kwargs
-        self.assertEqual(request["model"], "qwen-test")
+        self.assertIn("不要转为闲聊", request["messages"][0]["content"])
+        self.assertIn("文档中的第一人称叙述者不代表提问用户", request["messages"][0]["content"])
+        self.assertEqual(request["model"], "test-model")
         self.assertEqual(
             [m["role"] for m in request["messages"]],
             ["system", "user", "assistant", "user"],
@@ -51,7 +54,7 @@ class QwenTests(unittest.TestCase):
         self.assertFalse(request["stream"])
         client.chat.completions.create.return_value = SimpleNamespace(choices=[])
         with self.assertRaises(RuntimeError):
-            answer("问题", hits, [], client, "qwen-test")
+            answer("问题", hits, [], client, "test-model")
 
     def test_embedding_batch_and_normalization(self):
         client = MagicMock()
@@ -66,7 +69,7 @@ class QwenTests(unittest.TestCase):
             )
 
         client.embeddings.create.side_effect = response
-        with patch("app.models.create_client", return_value=client):
+        with patch("app.rag.embeddings.embeddings.create_client", return_value=client):
             embedder = SemanticEmbedder(
                 settings=Settings("test", "chat", "embedding-test")
             )

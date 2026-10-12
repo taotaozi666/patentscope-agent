@@ -2,8 +2,8 @@
 
 import unittest
 
-from app.documents import LoaderRegistry, UTF8DocumentLoader, loaders
-from app.splitters import split_documents
+from app.rag.documents import LoaderRegistry, UTF8DocumentLoader, loaders
+from app.rag.documents import split_documents
 
 
 class DocumentTests(unittest.TestCase):

@@ -1,11 +1,11 @@
-"""统一导出项目数据模型；此包不依赖业务、存储或页面模块。"""
+"""统一导出各模块的数据结构，仅依赖标准库。"""
 
-from app.schemas.chat import ChatMessage
-from app.schemas.configuration import Settings
-from app.schemas.knowledge import ChunkRecord, Hit, QueryResult, StoreStats
-from app.schemas.ingestion import IngestionJob, IngestionStage, IngestionStatus
+from .chat import ChatMessage
+from .configuration import Settings
+from .ingestion import IngestionJob, IngestionStage, IngestionStatus
+from .knowledge import ChunkRecord, DocumentRecord, Hit, QueryResult, StoreStats
 
 __all__ = [
-    "ChatMessage", "ChunkRecord", "Hit", "IngestionJob", "IngestionStage",
-    "IngestionStatus", "QueryResult", "Settings", "StoreStats",
+    "ChatMessage", "Settings", "IngestionJob", "IngestionStage", "IngestionStatus",
+    "ChunkRecord", "DocumentRecord", "Hit", "QueryResult", "StoreStats",
 ]

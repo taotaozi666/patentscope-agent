@@ -1,33 +1,19 @@
-"""集中封装千问客户端创建、聊天调用和文本向量模型。"""
+"""嵌入创建入口；离线演示与语义模型均实现 LangChain Embeddings。"""
 
+import hashlib
 import math
-from collections.abc import Callable, Sequence
+import re
+from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from itertools import pairwise
 
 from langchain_core.embeddings import Embeddings
 from openai import OpenAI
 
-from app.conf.config import get_settings
-from app.history import ChatHistory, as_history
-from app.prompt import prompt
-from app.schemas import ChatMessage, Settings
+from app.config import get_settings
+from app.models import create_client
 from app.trace import print_step
-
-
-def create_client(settings: Settings | None = None) -> OpenAI:
-    """通过百炼兼容接口创建千问客户端，密钥和地址均来自配置。"""
-    settings = settings or get_settings()
-    if not settings.api_key:
-        raise ValueError("请在 .env 中配置 DASHSCOPE_API_KEY")
-    print_step(
-        "创建模型客户端", 配置来源=".env / 系统环境变量", 服务="兼容接口", 超时秒=60
-    )
-    return OpenAI(
-        api_key=settings.api_key,
-        base_url=settings.base_url,
-        timeout=60.0,
-        max_retries=1,
-    )
+from app.schemas import Settings
 
 
 class SemanticEmbedder(Embeddings):
@@ -39,7 +25,7 @@ class SemanticEmbedder(Embeddings):
         self.settings = settings or get_settings()
         self.model_name = model_name or self.settings.embedding_model
         if not self.settings.api_key:
-            raise ValueError("语义检索需要配置 DASHSCOPE_API_KEY")
+            raise ValueError("语义检索需要配置模型服务的 API_KEY")
 
     def embed_query(self, text: str) -> list[float]:
         return self.embed_documents([text])[0]
@@ -145,31 +131,28 @@ class SemanticEmbedder(Embeddings):
         return vectors
 
 
-def generate_reply(
-    question: str,
-    context: str,
-    history: ChatHistory | Sequence[ChatMessage],
-    client: OpenAI,
-    model: str | None = None,
-) -> str:
-    """发送资料和历史消息，一次性返回完整回答。"""
-    messages = as_history(history).build_model_messages(
-        system_prompt=prompt.SYSTEM_PROMPT,
-        current_content=prompt.build_user_prompt(question, context),
-    )
-    model_name = model or get_settings().chat_model
-    print_step(
-        "聊天模型请求", 模型=model_name, 消息=messages, 思考模式=False, 流式=False
-    )
-    response = client.chat.completions.create(
-        model=model_name,
-        messages=messages,
-        stream=False,
-        extra_body={"enable_thinking": False},
-    )
-    reply = response.choices[0].message.content if response.choices else None
-    if not reply or not reply.strip():
-        print_step("聊天模型返回空结果")
-        raise RuntimeError("模型未返回文本，请重试。")
-    print_step("聊天模型返回", 最终回答=reply)
-    return reply
+class DemoEmbedder(Embeddings):
+    """将字符词频哈希到固定维度，用于无需密钥的离线流程演示。"""
+
+    dimensions = 2048
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        vectors = []
+        for text in texts:
+            words = re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]", text.lower())
+            tokens = words + [a + b for a, b in pairwise(words)]
+            vector = [0.0] * self.dimensions
+            for token in tokens:
+                # 使用稳定哈希，跨进程重启后同一文本仍得到相同向量。
+                index = int.from_bytes(hashlib.sha256(token.encode()).digest()[:8])
+                vector[index % self.dimensions] += 1.0
+            norm = math.sqrt(sum(value * value for value in vector)) or 1.0
+            vectors.append([value / norm for value in vector])
+        return vectors
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.embed_documents([text])[0]
+
+
+def create_embeddings(settings: Settings, offline: bool = False) -> Embeddings:
+    return DemoEmbedder() if offline else SemanticEmbedder(settings=settings)

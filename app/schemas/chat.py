@@ -1,8 +1,5 @@
-"""聊天消息数据结构，不包含历史管理业务。"""
-
 from typing import Literal, NotRequired, TypedDict
-
-from app.schemas.knowledge import Hit
+from .knowledge import Hit
 
 
 class ChatMessage(TypedDict):
@@ -11,3 +8,4 @@ class ChatMessage(TypedDict):
     role: Literal["user", "assistant"]
     content: str
     hits: NotRequired[list[Hit]]
+    retrieval: NotRequired[bool]

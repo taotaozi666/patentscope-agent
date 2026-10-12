@@ -8,16 +8,15 @@ from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from openai import OpenAI
 
-from app.conf.config import get_settings
-from app.documents import loaders
-from app.embeddings import create_embeddings
+from app.config import get_settings
+from app.rag.documents import loaders, split_documents
+from app.rag.embeddings import DemoEmbedder, SemanticEmbedder, create_embeddings
 from app.history import ChatHistory, as_history
-from app.models import SemanticEmbedder, generate_reply
-from app.prompt import prompt
+from app.models import generate_reply
+from app import prompt
 from app.schemas import ChatMessage, Hit, Settings
-from app.splitters import split_documents
 from app.storage import KnowledgeStore, create_store
-from app.trace import print_step, trace_operation
+from app.trace import debug_step, print_step, trace_operation
 
 
 class RAGService:
@@ -34,7 +33,11 @@ class RAGService:
             self.settings, offline=not self.settings.api_key
         )
         self.store = (
-            store if store is not None else create_store(self.embedder, self.settings)
+            store
+            if store is not None
+            else create_store(
+                self.embedder, self.settings, offline=isinstance(self.embedder, DemoEmbedder)
+            )
         )
 
     def add_file(
@@ -90,15 +93,13 @@ class RAGService:
             "文档切分完成",
             分割器="RecursiveCharacterTextSplitter",
             片段数量=len(chunks),
-            预览=[
-                {
-                    "片段编号": index,
-                    "字符数": len(doc.page_content),
-                    "原文预览": doc.page_content[:160],
-                }
-                for index, doc in enumerate(chunks[:3], 1)
-            ],
         )
+        debug_step("文档切分预览", lambda: {
+            "片段": [
+                {"片段编号": index, "字符数": len(doc.page_content), "原文预览": doc.page_content[:160]}
+                for index, doc in enumerate(chunks[:3], 1)
+            ]
+        })
         if not chunks:
             raise ValueError("文档没有可导入的正文")
         file_hashes = {doc.metadata.get("content_hash") for doc in chunks}
@@ -139,7 +140,7 @@ class RAGService:
         vectors: list[list[float]] = []
         texts = [document.page_content for document in chunks]
         if isinstance(self.embedder, SemanticEmbedder):
-            # 千问适配器内部按接口限制分批，并在整份文档期间复用同一客户端。
+            # 语义向量适配器内部按批次处理，并在整份文档期间复用同一客户端。
             vectors = self.embedder.embed_documents_with_progress(
                 texts,
                 lambda completed, total: on_progress("embedding", completed, total)
@@ -169,7 +170,7 @@ class RAGService:
             "写入知识库完成",
             存储实现=type(self.store).__name__,
             新增片段=count,
-            当前片段数=self.store.stats().chunks,
+            当前片段数=self.store.count(),
         )
         return count
 
@@ -183,22 +184,23 @@ class RAGService:
 
     def search(self, question: str, top_k: int = 3) -> list[Hit]:
         """按余弦相似度返回最相关的若干片段。"""
-        if not self.store.stats().chunks or not question.strip() or top_k <= 0:
+        count = self.store.count()
+        if not count or not question.strip() or top_k <= 0:
             print_step("跳过检索", 原因="知识库为空、问题为空或 Top K 无效")
             return []
         print_step(
             "问题进入检索",
-            问题=question,
+            问题字符数=len(question),
             检索模型=type(self.embedder).__name__,
             top_k=top_k,
-            知识库片段数=self.store.stats().chunks,
+            知识库片段数=count,
         )
         query = self.embedder.embed_query(question)
         print_step(
             "问题向量生成完成",
             向量长度=len(query),
-            向量预览=query[:8],
         )
+        debug_step("问题向量预览", lambda: {"向量预览": query[:8]})
         hits = [
             Hit(record.source, record.text, score, record.chunk)
             for record, score in self.store.nearest(query, top_k)
@@ -207,17 +209,14 @@ class RAGService:
             "检索结果",
             结果数量=len(hits),
             排序依据="向量相似度，没有独立重排",
-            片段=[
-                {
-                    "引用编号": i,
-                    "来源": hit.source,
-                    "片段编号": hit.chunk,
-                    "相似度": round(hit.score, 6),
-                    "原文": hit.text,
-                }
-                for i, hit in enumerate(hits, 1)
-            ],
         )
+        debug_step("检索原文", lambda: {
+            "片段": [
+                {"引用编号": i, "来源": hit.source, "片段编号": hit.chunk,
+                 "相似度": round(hit.score, 6), "原文": hit.text}
+                for i, hit in enumerate(hits, 1)
+            ]
+        })
         return hits
 
 
@@ -231,17 +230,18 @@ def answer(
     """根据本轮资料生成完整回答，无客户端时返回检索原文。"""
     if not hits:
         reply = "知识库中没有找到相关内容，请补充文档或换一种问法。"
-        print_step("无检索结果", 流转="跳过聊天模型", 最终回答=reply)
+        print_step("无检索结果", 流转="跳过聊天模型", 回答字符数=len(reply))
         return reply
     context = prompt.build_context([(hit.source, hit.chunk, hit.text) for hit in hits])
-    print_step("资料拼接完成", 引用片段数=len(hits), 资料=context)
+    print_step("资料拼接完成", 引用片段数=len(hits), 资料字符数=len(context))
+    debug_step("完整资料", lambda: {"资料": context})
     if client is None:
         reply = "演示模式：以下为检索到的原文，尚未调用大模型生成回答。\n\n" + context
-        print_step("演示模式流转", 流转="跳过聊天模型", 最终回答=reply)
+        print_step("演示模式流转", 流转="跳过聊天模型", 回答字符数=len(reply))
         return reply
     print_step(
         "流转至聊天模型",
-        原始问题=question,
+        问题字符数=len(question),
         历史消息数=as_history(history).context_count(),
     )
     return generate_reply(

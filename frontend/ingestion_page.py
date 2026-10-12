@@ -5,20 +5,12 @@ from hashlib import sha256
 
 import streamlit as st
 
-from app.conf.config import Settings
-from app.ingestion import IngestionManager
-from app.schemas import IngestionJob
+from app.rag.documents import loaders
+from app.ingestion import IngestionManager, get_ingestion_manager
+from app.schemas import IngestionJob, Settings
 from app.storage import KnowledgeStore
 
 logger = logging.getLogger(__name__)
-
-
-@st.cache_resource(show_spinner=False)
-def get_ingestion_manager(settings: Settings) -> IngestionManager:
-    """同一服务进程共享任务队列，浏览器会话各自显示任务。"""
-    manager = IngestionManager(settings)
-    manager.start()
-    return manager
 
 
 STAGE_LABELS = {
@@ -70,18 +62,20 @@ def _render_jobs(manager: IngestionManager) -> None:
                 text=f"{job.progress}% · {STAGE_LABELS.get(job.stage, job.stage)}",
             )
             if job.status == "completed":
-                st.success(f"已写入 {job.chunk_count} 个片段，可在聊天页提问。")
+                st.success(f"已写入 {job.chunk_count} 个片段，可在知识库问答页提问。")
             elif job.status == "skipped":
                 st.info(job.result_message or "内容已存在，跳过重复导入。")
             elif job.status == "failed":
                 st.error(job.error_message or "导入失败")
-                if st.button("重试", key=f"retry_{job.id}"):
-                    manager.retry(job.id)
-                    st.rerun()
-            elif job.status == "queued":
-                if st.button("取消", key=f"cancel_{job.id}"):
-                    manager.cancel(job.id)
-                    st.rerun()
+            if job.status in {"failed", "queued"}:
+                label, action = ("重试", manager.retry) if job.status == "failed" else ("取消", manager.cancel)
+                if st.button(label, key=f"{job.status}_{job.id}"):
+                    try:
+                        action(job.id)
+                    except ValueError as exc:
+                        st.warning(str(exc))
+                    else:
+                        st.rerun()
 
 
 @st.fragment(run_every="2s")
@@ -97,7 +91,7 @@ def render_ingestion_page(
     )
     uploads = st.file_uploader(
         "选择一个或多个 TXT / Markdown 文档",
-        type=["txt", "md"],
+        type=loaders.extensions,
         accept_multiple_files=True,
         key=f"ingestion_files_{uploader_generation}",
         help=f"每次最多 {settings.ingestion_max_files} 个文件；单文件上限 "
@@ -160,7 +154,7 @@ def render_ingestion_page(
     if st.button("提交后台解析", type="primary", disabled=not selected_uploads):
         try:
             files = [(upload.name, upload.getvalue()) for upload in selected_uploads]
-            jobs = manager.submit_batch(files, offline=offline)
+            jobs = manager.submit_batch(files, offline=offline, settings=settings)
             st.session_state["last_ingestion_batch"] = jobs[0].batch_id
             st.success(f"已提交 {len(jobs)} 个文件，后台开始处理。")
             st.session_state["ingestion_uploader_generation"] = uploader_generation + 1

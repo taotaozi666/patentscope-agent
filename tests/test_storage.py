@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from langchain_core.documents import Document
 
-from app.embeddings import DemoEmbedder
+from app.rag.embeddings import DemoEmbedder
 from app.rag import RAGService
 from app.storage import ChromaKnowledgeStore
 
@@ -31,7 +31,9 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(store.sources(), ["同名文档"])
         result = store.query("苹果", "同名文档", offset=1, limit=1)
         self.assertEqual(result.total, 2)
-        self.assertEqual(result.items[0].text, "第三段苹果")
+        matches = store.query("苹果", "同名文档").items
+        self.assertEqual({record.text for record in matches}, {"第一段苹果", "第三段苹果"})
+        self.assertEqual(result.items, matches[1:2])
         self.assertEqual(store.get(result.items[0].id), result.items[0])
         self.assertEqual(store.query(source="不存在").total, 0)
         self.assertEqual(store.query(offset=10).items, [])
@@ -51,6 +53,36 @@ class StorageTests(unittest.TestCase):
         store.clear()
         self.assertEqual(store.stats().documents, 0)
         self.assertEqual(store.query().total, 0)
+
+    def test_document_listing_and_chunk_scope(self):
+        self.store.add_documents(self.docs("同名.md", ["第一段", "第二段", "第三段"]))
+        self.store.add_documents(self.docs("同名.md", ["另一份文档"]))
+        with patch.object(self.store.collection, "get", wraps=self.store.collection.get) as get:
+            documents = self.store.documents()
+        self.assertEqual(get.call_args.kwargs["include"], ["metadatas"])
+        self.assertEqual(len(documents), 2)
+        first = next(doc for doc in documents if doc.chunks == 3)
+        second = next(doc for doc in documents if doc.chunks == 1)
+        self.assertNotEqual(first.id, second.id)
+        result = self.store.query(document_id=first.id, offset=1, limit=1)
+        self.assertEqual(result.total, 3)
+        self.assertEqual(result.items[0].text, "第二段")
+        self.assertEqual(result.items[0].document_id, first.id)
+        self.assertEqual(self.store.query("另一份", document_id=first.id).total, 0)
+        self.assertEqual(self.store.query(source="不存在", document_id=first.id).total, 0)
+        self.assertEqual(self.store.query(document_id="不存在").total, 0)
+
+        # 重试或部分更新后，导入时间可能不同，详情仍按片段编号排列。
+        records = self.store.query(document_id=first.id).items
+        self.store.collection.update(
+            ids=[records[0].id], metadatas=[{"created_at": "2099-01-01T00:00:00+00:00"}]
+        )
+        self.assertEqual(
+            [record.chunk for record in self.store.query(document_id=first.id).items],
+            [1, 2, 3],
+        )
+        self.store.clear()
+        self.assertEqual(self.store.documents(), [])
 
     def test_persistence_and_collection_isolation(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
@@ -114,6 +146,45 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(
             record.metadata["heading_path"], "# 城市总标题\n## 云朵失物招领"
         )
+
+    def test_browsing_loads_only_target_page_without_vectors(self):
+        self.store.add_documents(self.docs("large.txt", [f"text {i}" for i in range(100)]))
+        with patch.object(self.store.collection, "get", wraps=self.store.collection.get) as get:
+            result = self.store.query(offset=40, limit=10, include_vectors=False)
+        self.assertEqual(result.total, 100)
+        self.assertEqual(len(result.items), 10)
+        self.assertEqual(result.items[0].text, "text 40")
+        self.assertEqual(get.call_args_list[0].kwargs["include"], ["metadatas"])
+        self.assertEqual(len(get.call_args_list[1].kwargs["ids"]), 10)
+        self.assertNotIn("embeddings", get.call_args_list[1].kwargs["include"])
+        self.assertTrue(all(not record.vector for record in result.items))
+
+    def test_query_tolerates_concurrent_deletion(self):
+        self.store.add_documents(self.docs("test.txt", ["text"]))
+        original = self.store.collection.get
+        def remove_after_scan(*args, **kwargs):
+            result = original(*args, **kwargs)
+            if "ids" not in kwargs:
+                self.store.collection.delete(ids=result["ids"])
+            return result
+        with patch.object(self.store.collection, "get", side_effect=remove_after_scan):
+            result = self.store.query()
+        self.assertEqual(result.items, [])
+        self.assertEqual(self.store.count(), 0)
+
+    def test_count_and_retrieval_avoid_unused_data(self):
+        self.store.add_documents(self.docs("test.txt", ["apple"]))
+        with patch.object(self.store.collection, "get", wraps=self.store.collection.get) as get:
+            self.assertEqual(self.store.count(), 1)
+            get.assert_not_called()
+        with patch.object(self.store.collection, "query", wraps=self.store.collection.query) as query:
+            self.store.nearest(self.embeddings.embed_query("apple"), 1)
+        self.assertNotIn("embeddings", query.call_args.kwargs["include"])
+
+    def test_query_preserves_case_insensitive_keyword_matching(self):
+        self.store.add_documents(self.docs("UPPER.txt", ["APPLE", "banana"]))
+        self.assertEqual(self.store.query("apple").total, 1)
+        self.assertEqual(self.store.query("upper").total, 2)
 
 
 if __name__ == "__main__":

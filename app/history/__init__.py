@@ -1,9 +1,5 @@
-"""统一导出聊天历史处理接口。"""
+"""history 模块的公共接口。"""
 
-from app.history.history import (
-    ChatHistory,
-    as_history,
-    get_session_history,
-)
+from .history import (ChatHistory, as_history, HistorySession, get_session_history)
 
-__all__ = ["ChatHistory", "as_history", "get_session_history"]
+__all__ = ['ChatHistory', 'as_history', 'HistorySession', 'get_session_history']

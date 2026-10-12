@@ -1,19 +1,19 @@
 """知识库存储契约与 Chroma 实现，页面不依赖数据库内部结构。"""
 
 from datetime import UTC, datetime
+from hashlib import sha256
 from typing import Any, Protocol, cast
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import chromadb
-from chromadb.api.types import Metadata, PyEmbeddings
+from chromadb.api.types import Include, Metadata, PyEmbeddings
 from chromadb.api.types import Where
 from chromadb.config import Settings as ChromaSettings
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
-from app.embeddings import DemoEmbedder, collection_name
-from app.schemas import ChunkRecord, QueryResult, Settings, StoreStats
+from app.schemas import ChunkRecord, DocumentRecord, QueryResult, Settings, StoreStats
 from app.trace import print_step
 
 
@@ -32,13 +32,17 @@ class KnowledgeStore(Protocol):
         self, source: str, content_hash: str, pipeline_fingerprint: str
     ) -> None: ...
     def stats(self) -> StoreStats: ...
+    def count(self) -> int: ...
     def sources(self) -> list[str]: ...
+    def documents(self) -> list[DocumentRecord]: ...
     def query(
         self,
         keyword: str = "",
         source: str | None = None,
         offset: int = 0,
         limit: int = 20,
+        document_id: str | None = None,
+        include_vectors: bool = True,
     ) -> QueryResult: ...
     def get(self, record_id: str) -> ChunkRecord | None: ...
     def nearest(
@@ -112,6 +116,8 @@ class ChromaKnowledgeStore:
                 "chunk": document.metadata.get("chunk", index),
                 "chunk_total": len(documents),
             }
+            if embeddings is not None:
+                metadata["vector_dimensions"] = len(embeddings[index - 1])
             prepared.append(
                 Document(page_content=document.page_content, metadata=metadata)
             )
@@ -260,13 +266,12 @@ class ChromaKnowledgeStore:
             self.collection.delete(ids=stale_ids)
 
     def stats(self) -> StoreStats:
-        result = self.collection.get(include=["metadatas"])
-        return StoreStats(
-            len(
-                {str(metadata["document_id"]) for metadata in result["metadatas"] or []}
-            ),
-            len(result["ids"]),
-        )
+        documents = self.documents()
+        return StoreStats(len(documents), sum(doc.chunks for doc in documents))
+
+    def count(self) -> int:
+        """仅统计片段数量，不读取全文或元数据。"""
+        return self.collection.count()
 
     def sources(self) -> list[str]:
         return sorted(
@@ -276,6 +281,29 @@ class ChromaKnowledgeStore:
                 or []
             }
         )
+
+    def documents(self) -> list[DocumentRecord]:
+        """按文档 ID 汇总实际入库片段，同名的独立导入仍分别展示。"""
+        grouped: dict[str, list[Metadata]] = {}
+        for metadata in self.collection.get(include=["metadatas"])["metadatas"] or []:
+            grouped.setdefault(str(metadata["document_id"]), []).append(metadata)
+        documents = []
+        for document_id, records in grouped.items():
+            first = min(records, key=lambda item: int(str(item["chunk"])))
+            documents.append(
+                DocumentRecord(
+                    id=document_id,
+                    source=str(first["source"]),
+                    title=str(first.get("document_title", "")),
+                    format=str(first.get("format", "")),
+                    chunks=len(records),
+                    created_at=min(
+                        datetime.fromisoformat(str(item["created_at"]))
+                        for item in records
+                    ),
+                )
+            )
+        return sorted(documents, key=lambda doc: (doc.created_at, doc.id), reverse=True)
 
     @staticmethod
     def _records(result: Any) -> list[ChunkRecord]:
@@ -308,43 +336,55 @@ class ChromaKnowledgeStore:
         source: str | None = None,
         offset: int = 0,
         limit: int = 20,
+        document_id: str | None = None,
+        include_vectors: bool = True,
     ) -> QueryResult:
         if offset < 0 or limit < 1:
             raise ValueError("分页偏移必须非负，每页数量必须为正数")
-        where: Where | None = (
-            {"source": {"$eq": source}} if source is not None else None
-        )
-        # Chroma 不提供原文和来源的联合模糊匹配；仅扫描文本元数据，不全量加载向量。
-        candidates = self._records(
-            self.collection.get(where=where, include=["documents", "metadatas"])
-        )
+        conditions: list[Where] = []
+        if source is not None:
+            conditions.append({"source": {"$eq": source}})
+        if document_id is not None:
+            conditions.append({"document_id": {"$eq": document_id}})
+        where: Where | None = None
+        if conditions:
+            where = conditions[0] if len(conditions) == 1 else {"$and": conditions}
         keyword = keyword.strip().casefold()
-        filtered = [
-            record
-            for record in candidates
-            if not keyword
-            or keyword in record.text.casefold()
-            or keyword in record.source.casefold()
-        ]
-        filtered.sort(
-            key=lambda record: (
-                record.created_at,
-                record.document_id,
-                record.chunk,
-                record.id,
-            )
+        # 无关键词时只扫描排序所需的元数据，正文仅加载目标页。
+        candidates = self.collection.get(
+            where=where, include=["metadatas", "documents"] if keyword else ["metadatas"]
         )
-        page = filtered[offset : offset + limit]
-        if page:
-            records = self._records(
-                self.collection.get(
-                    ids=[record.id for record in page],
-                    include=["documents", "metadatas", "embeddings"],
-                )
+        metadatas = candidates["metadatas"] or []
+        ids = [
+            record_id for index, record_id in enumerate(candidates["ids"])
+            if not keyword
+            or keyword in str(metadatas[index]["source"]).casefold()
+            or keyword in str((candidates["documents"] or [])[index]).casefold()
+        ]
+        metadata_by_id = dict(zip(candidates["ids"], metadatas))
+
+        def order(record_id: str) -> tuple:
+            metadata = metadata_by_id[record_id]
+            chunk = int(str(metadata["chunk"]))
+            if document_id is not None:
+                return chunk, record_id
+            return (
+                datetime.fromisoformat(str(metadata["created_at"])),
+                str(metadata["document_id"]), chunk, record_id,
             )
-            by_id = {record.id: record for record in records}
-            page = [by_id[record.id] for record in page]
-        return QueryResult(page, len(filtered))
+
+        ids.sort(key=order)
+        page_ids = ids[offset : offset + limit]
+        if not page_ids:
+            return QueryResult([], len(ids))
+        include: Include = ["documents", "metadatas"]
+        if include_vectors:
+            include.append("embeddings")
+        records = self._records(self.collection.get(ids=page_ids, include=include))
+        by_id = {record.id: record for record in records}
+        # 两次读取之间可能发生更新或清空，不假定记录仍然存在。
+        page = [by_id[record_id] for record_id in page_ids if record_id in by_id]
+        return QueryResult(page, len(ids))
 
     def get(self, record_id: str) -> ChunkRecord | None:
         records = self._records(
@@ -370,23 +410,21 @@ class ChromaKnowledgeStore:
         result = self.collection.query(
             query_embeddings=[vector],
             n_results=min(top_k, count),
-            include=["documents", "metadatas", "distances", "embeddings"],
+            include=["documents", "metadatas", "distances"],
         )
         if any(
             result[key] is None
-            for key in ("documents", "metadatas", "distances", "embeddings")
+            for key in ("documents", "metadatas", "distances")
         ):
             raise RuntimeError("Chroma 返回的检索数据不完整")
         assert result["documents"] is not None
         assert result["metadatas"] is not None
         assert result["distances"] is not None
-        assert result["embeddings"] is not None
         records = self._records(
             {
                 "ids": result["ids"][0],
                 "documents": result["documents"][0],
                 "metadatas": result["metadatas"][0],
-                "embeddings": result["embeddings"][0],
             }
         )
         hits = [
@@ -404,9 +442,23 @@ class ChromaKnowledgeStore:
             self.collection.delete(ids=ids)
 
 
-def create_store(embeddings: Embeddings, settings: Settings) -> KnowledgeStore:
+def create_store(
+    embeddings: Embeddings, settings: Settings, offline: bool = False
+) -> KnowledgeStore:
     return ChromaKnowledgeStore(
         embeddings,
         settings.chroma_directory,
-        collection_name(settings, isinstance(embeddings, DemoEmbedder)),
+        collection_name(settings, offline),
     )
+
+
+def collection_name(settings: Settings, offline: bool = False) -> str:
+    """按模型和服务地址分集合，密钥更换不会丢失已有知识库。"""
+    # 沿用历史身份前缀以保持已有集合可访问；服务地址和模型名由配置决定。
+    identity = (
+        "demo-hash-v1-2048"
+        if offline
+        else f"qwen-compatible:{settings.base_url}:{settings.embedding_model}"
+    )
+    suffix = sha256(identity.encode()).hexdigest()[:16]
+    return f"{settings.chroma_collection}_{suffix}"

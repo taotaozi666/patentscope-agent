@@ -8,7 +8,7 @@ from dotenv import dotenv_values
 
 from app.schemas import Settings
 
-# 配置模块位于 app/conf，向上两层才是项目根目录。
+# 配置模块位于 app/config，向上两层是项目根目录。
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 
@@ -41,6 +41,9 @@ def get_settings(
 ) -> Settings:
     """每次调用重新读取配置，让后续页面操作使用最新的 .env。"""
     config = Config(env_file, environ)
+    log_level = config.get("LOG_LEVEL", "INFO").upper()
+    if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR"}:
+        raise ValueError("LOG_LEVEL 必须为 DEBUG、INFO、WARNING 或 ERROR")
     chunk_size = int(config.get("CHUNK_SIZE", "600"))
     chunk_overlap = int(config.get("CHUNK_OVERLAP", "100"))
     if not 0 <= chunk_overlap < chunk_size:
@@ -79,4 +82,5 @@ def get_settings(
         ingestion_max_files=max_files,
         ingestion_max_file_bytes=max_file_bytes,
         ingestion_max_batch_bytes=max_batch_bytes,
+        log_level=log_level,
     )

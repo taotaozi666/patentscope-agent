@@ -1,5 +1,3 @@
-"""知识库与检索数据模型，供业务、存储和页面共享。"""
-
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -17,6 +15,18 @@ class ChunkRecord:
     vector: list[float]
     created_at: datetime
     metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class DocumentRecord:
+    """已导入文档的摘要，不加载片段正文和向量。"""
+
+    id: str
+    source: str
+    title: str
+    format: str
+    chunks: int
+    created_at: datetime
 
 
 @dataclass(frozen=True)

@@ -14,7 +14,7 @@ def main() -> None:
                 "-m",
                 "streamlit",
                 "run",
-                str(Path(__file__).resolve().parent.parent / "frontend" / "ui.py"),
+                str(Path(__file__).resolve().parents[2] / "frontend" / "ui.py"),
             ],
             check=True,
         )
