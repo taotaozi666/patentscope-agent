@@ -45,13 +45,27 @@ def get_settings(
     chunk_overlap = int(config.get("CHUNK_OVERLAP", "100"))
     if not 0 <= chunk_overlap < chunk_size:
         raise ValueError("CHUNK_OVERLAP 必须非负且小于 CHUNK_SIZE")
+    max_files = int(config.get("INGESTION_MAX_FILES", "20"))
+    max_file_bytes = int(config.get("INGESTION_MAX_FILE_BYTES", "52428800"))
+    max_batch_bytes = int(config.get("INGESTION_MAX_BATCH_BYTES", "209715200"))
+    embedding_concurrency = int(config.get("EMBEDDING_CONCURRENCY", "2"))
+    if min(max_files, max_file_bytes, max_batch_bytes) <= 0:
+        raise ValueError("后台上传数量和文件大小限制必须大于零")
+    if not 1 <= embedding_concurrency <= 8:
+        raise ValueError("EMBEDDING_CONCURRENCY 必须在 1 到 8 之间")
     directory = Path(config.get("CHROMA_DIRECTORY", ".chroma")).expanduser()
     if not directory.is_absolute():
         directory = Path(env_file).resolve().parent / directory
+    ingestion_directory = Path(
+        config.get("INGESTION_DIRECTORY", str(Path(env_file).resolve().parent / ".ingestion"))
+    ).expanduser()
+    if not ingestion_directory.is_absolute():
+        ingestion_directory = Path(env_file).resolve().parent / ingestion_directory
     return Settings(
         api_key=config.first("DASHSCOPE_API_KEY", "API_KEY"),
         chat_model=config.first("CHAT_MODEL", "MODEL", default="qwen3.8-max"),
         embedding_model=config.get("EMBEDDING_MODEL", "qwen3.7-text-embedding"),
+        embedding_concurrency=embedding_concurrency,
         base_url=config.first(
             "BASE_URL",
             "DASHSCOPE_BASE_URL",
@@ -61,4 +75,8 @@ def get_settings(
         chroma_collection=config.get("CHROMA_COLLECTION", "knowledge"),
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
+        ingestion_directory=str(ingestion_directory.resolve()),
+        ingestion_max_files=max_files,
+        ingestion_max_file_bytes=max_file_bytes,
+        ingestion_max_batch_bytes=max_batch_bytes,
     )

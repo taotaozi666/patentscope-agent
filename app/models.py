@@ -1,7 +1,8 @@
 """集中封装千问客户端创建、聊天调用和文本向量模型。"""
 
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 
 from langchain_core.embeddings import Embeddings
 from openai import OpenAI
@@ -30,7 +31,7 @@ def create_client(settings: Settings | None = None) -> OpenAI:
 
 
 class SemanticEmbedder(Embeddings):
-    """LangChain 千问嵌入适配器，保留项目配置的兼容接口地址。"""
+    """保留项目配置的兼容接口地址。"""
 
     def __init__(
         self, model_name: str | None = None, settings: Settings | None = None
@@ -44,37 +45,103 @@ class SemanticEmbedder(Embeddings):
         return self.embed_documents([text])[0]
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return self.embed_documents_with_progress(texts)
+
+    def embed_documents_with_progress(
+        self,
+        texts: list[str],
+        on_batch: Callable[[int, int], None] | None = None,
+    ) -> list[list[float]]:
+        """复用单个 HTTP 客户端分批向量化，并可报告批次进度。"""
         vectors: list[list[float]] = []
         if not texts:
             return vectors
+        batch_size = 10
+        total_batches = (len(texts) + batch_size - 1) // batch_size
+        total_characters = sum(len(text) for text in texts)
+        worker_count = min(self.settings.embedding_concurrency, total_batches)
+        print_step(
+            "向量接口请求开始",
+            模型=self.model_name,
+            文本数量=len(texts),
+            总字符数=total_characters,
+            批次数=total_batches,
+            每批数量=batch_size,
+            并发数=worker_count,
+        )
+        batches = [
+            texts[start : start + batch_size]
+            for start in range(0, len(texts), batch_size)
+        ]
+        vectors = [[] for _ in texts]
+
+        def request_batch(client: OpenAI, batch: list[str]) -> list[list[float]]:
+            response = client.embeddings.create(
+                model=self.model_name, input=batch, encoding_format="float"
+            )
+            items = sorted(response.data, key=lambda item: item.index)
+            if [item.index for item in items] != list(range(len(batch))):
+                raise ValueError("向量接口返回的片段索引不完整")
+            normalized: list[list[float]] = []
+            for item in items:
+                norm = math.sqrt(sum(value * value for value in item.embedding))
+                if not norm or not math.isfinite(norm):
+                    raise ValueError("向量接口返回无效向量")
+                normalized.append([value / norm for value in item.embedding])
+            return normalized
+
+        # 保持并发中的待处理请求有界，避免超大文件一次创建大量 Future。
         with create_client(self.settings) as client:
-            # 每批不超过 10 条，兼容千问文本向量接口的批量限制。
-            for start in range(0, len(texts), 10):
-                batch = texts[start : start + 10]
-                print_step(
-                    "向量接口请求",
-                    模型=self.model_name,
-                    批次=start // 10 + 1,
-                    输入文本=batch,
-                )
-                response = client.embeddings.create(
-                    model=self.model_name, input=batch, encoding_format="float"
-                )
-                items = sorted(response.data, key=lambda item: item.index)
-                if [item.index for item in items] != list(range(len(batch))):
-                    raise ValueError("向量接口返回的片段索引不完整")
-                for item in items:
-                    norm = math.sqrt(sum(value * value for value in item.embedding))
-                    if not norm or not math.isfinite(norm):
-                        raise ValueError("向量接口返回无效向量")
-                    vectors.append([value / norm for value in item.embedding])
-                print_step(
-                    "向量接口返回",
-                    批次=start // 10 + 1,
-                    向量数量=len(items),
-                    向量长度=[len(item.embedding) for item in items],
-                    状态="已归一化",
-                )
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                pending: dict[Future[list[list[float]]], int] = {}
+                next_batch = 0
+                completed_batches = 0
+                completed_texts = 0
+
+                def submit_next() -> bool:
+                    nonlocal next_batch
+                    if next_batch >= total_batches:
+                        return False
+                    future = executor.submit(
+                        request_batch, client, batches[next_batch]
+                    )
+                    pending[future] = next_batch
+                    next_batch += 1
+                    return True
+
+                for _ in range(worker_count):
+                    submit_next()
+                while pending:
+                    done, _ = wait(pending, return_when=FIRST_COMPLETED)
+                    for future in done:
+                        batch_number = pending.pop(future)
+                        start = batch_number * batch_size
+                        result = future.result()
+                        vectors[start : start + len(result)] = result
+                        completed_batches += 1
+                        completed_texts += len(batches[batch_number])
+                        if on_batch:
+                            on_batch(completed_texts, len(texts))
+                        # 并发完成顺序可能不同；按完成数量输出稀疏进度。
+                        if (
+                            completed_batches == 1
+                            or completed_batches % 50 == 0
+                            or completed_batches == total_batches
+                        ):
+                            print_step(
+                                "向量接口批次进度",
+                                已完成批次=completed_batches,
+                                总批次=total_batches,
+                                已处理文本=completed_texts,
+                                总文本=len(texts),
+                            )
+                        submit_next()
+        print_step(
+            "向量接口返回",
+            向量数量=len(vectors),
+            向量长度=len(vectors[0]) if vectors else 0,
+            状态="已归一化",
+        )
         return vectors
 
 

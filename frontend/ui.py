@@ -9,13 +9,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import streamlit as st
 
 from app.conf.config import get_settings
-from app.documents import loaders
 from app.embeddings import create_embeddings
 from app.history import get_session_history
 from app.models import create_client
 from app.rag import RAGService, answer
 from app.trace import print_step, trace_operation
 from frontend.chat_components import render_message
+from frontend.ingestion_page import render_ingestion_page
 from frontend.knowledge_page import render_knowledge_page
 
 logger = logging.getLogger(__name__)
@@ -25,8 +25,10 @@ history = get_session_history(st.session_state)
 
 
 st.set_page_config(page_title="RAG 知识库聊天", page_icon="📚")
-page = st.sidebar.radio("页面", ["聊天", "知识库查询"], key="current_page")
-st.title("📚 RAG 知识库聊天" if page == "聊天" else "📋 知识库查询")
+page = st.sidebar.radio(
+    "页面", ["聊天", "知识库查询", "导入任务"], key="current_page"
+)
+st.title({"聊天": "📚 RAG 知识库聊天", "知识库查询": "📋 知识库查询", "导入任务": "📥 文档导入任务"}[page])
 st.caption("上传文档后提问。知识库由 Chroma 保存到本地，聊天记录保存在当前会话内存。")
 
 with st.sidebar:
@@ -71,17 +73,7 @@ if st.session_state.get("backend_config") != backend_config:
 
 rag: RAGService = st.session_state.rag
 with st.sidebar:
-    uploads = st.file_uploader(
-        "上传 UTF-8 文档", type=loaders.extensions, accept_multiple_files=True
-    )
-    if st.button("添加到知识库", disabled=not uploads):
-        for upload in uploads:
-            try:
-                count = rag.add_file(upload.name, upload.getvalue())
-                st.success(f"{upload.name}：{count} 个片段")
-            except Exception as exc:
-                logger.exception("导入文档失败")
-                st.error(f"{upload.name} 导入失败：{exc}")
+    st.caption("批量上传及后台向量解析请使用“导入任务”页面。")
     if st.button("载入示例文档"):
         try:
             rag.add_document(
@@ -104,6 +96,11 @@ with st.sidebar:
 
 if page == "知识库查询":
     render_knowledge_page(rag.store)
+    st.stop()
+if page == "导入任务":
+    render_ingestion_page(
+        settings, rag.store, backend == "离线演示（字符匹配）"
+    )
     st.stop()
 
 if not settings.api_key:

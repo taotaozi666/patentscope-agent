@@ -12,3 +12,5 @@ wheels/
 .env
 .uv-cache/
 .chroma/
+docs/
+.ingestion/

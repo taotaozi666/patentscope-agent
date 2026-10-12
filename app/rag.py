@@ -1,6 +1,7 @@
 """LangChain 文档导入、Chroma 检索与回答生成。"""
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from hashlib import sha256
 from pathlib import Path
 
 from langchain_core.documents import Document
@@ -11,7 +12,7 @@ from app.conf.config import get_settings
 from app.documents import loaders
 from app.embeddings import create_embeddings
 from app.history import ChatHistory, as_history
-from app.models import generate_reply
+from app.models import SemanticEmbedder, generate_reply
 from app.prompt import prompt
 from app.schemas import ChatMessage, Hit, Settings
 from app.splitters import split_documents
@@ -36,15 +37,29 @@ class RAGService:
             store if store is not None else create_store(self.embedder, self.settings)
         )
 
-    def add_file(self, source: str, content: bytes) -> int:
+    def add_file(
+        self,
+        source: str,
+        content: bytes,
+        on_progress: Callable[[str, int, int], None] | None = None,
+    ) -> int:
         """加载器统一返回 Document，后续流程不依赖文件格式。"""
         with trace_operation("文档导入", 来源=source):
             documents = loaders.load(source, content)
+            content_hash = sha256(content).hexdigest()
+            pipeline_fingerprint = self._pipeline_fingerprint(
+                content_hash, Path(source).suffix.lower()
+            )
+            for document in documents:
+                document.metadata["content_hash"] = content_hash
+                document.metadata["pipeline_fingerprint"] = pipeline_fingerprint
             print_step("文档加载完成", 加载器="LoaderRegistry", 文档数量=len(documents))
-            return self.add_documents(documents)
+            return self.add_documents(documents, on_progress)
 
     def add_document(self, source: str, text: str) -> int:
         """程序直接传入文本时也转换为统一文档对象。"""
+        content = text.encode("utf-8")
+        content_hash = sha256(content).hexdigest()
         return self.add_documents(
             [
                 Document(
@@ -52,12 +67,22 @@ class RAGService:
                     metadata={
                         "source": source,
                         "format": Path(source).suffix.lower() or ".txt",
+                        "content_hash": content_hash,
+                        "pipeline_fingerprint": self._pipeline_fingerprint(
+                            content_hash, Path(source).suffix.lower() or ".txt"
+                        ),
                     },
                 )
             ]
         )
 
-    def add_documents(self, documents: list[Document]) -> int:
+    def add_documents(
+        self,
+        documents: list[Document],
+        on_progress: Callable[[str, int, int], None] | None = None,
+    ) -> int:
+        if on_progress:
+            on_progress("splitting", 0, 0)
         chunks = split_documents(
             documents, self.settings.chunk_size, self.settings.chunk_overlap
         )
@@ -65,11 +90,81 @@ class RAGService:
             "文档切分完成",
             分割器="RecursiveCharacterTextSplitter",
             片段数量=len(chunks),
-            片段=[{"原文": doc.page_content, "元数据": doc.metadata} for doc in chunks],
+            预览=[
+                {
+                    "片段编号": index,
+                    "字符数": len(doc.page_content),
+                    "原文预览": doc.page_content[:160],
+                }
+                for index, doc in enumerate(chunks[:3], 1)
+            ],
         )
         if not chunks:
             raise ValueError("文档没有可导入的正文")
-        count = self.store.add_documents(chunks)
+        file_hashes = {doc.metadata.get("content_hash") for doc in chunks}
+        fingerprints = {doc.metadata.get("pipeline_fingerprint") for doc in chunks}
+        source_names = {str(doc.metadata.get("source", "")) for doc in chunks}
+        if len(source_names) == len(file_hashes) == len(fingerprints) == 1:
+            content_hash = next(iter(file_hashes))
+            fingerprint = next(iter(fingerprints))
+            if isinstance(content_hash, str) and isinstance(fingerprint, str):
+                existing_source = self.store.find_complete_document(
+                    content_hash, fingerprint, len(chunks)
+                )
+                if existing_source is not None:
+                    source = str(chunks[0].metadata.get("source", ""))
+                    source_key = source.replace("\\", "/").rsplit("/", 1)[
+                        -1
+                    ].casefold()
+                    existing_source_key = existing_source.replace("\\", "/").rsplit(
+                        "/", 1
+                    )[-1].casefold()
+                    if source_key == existing_source_key:
+                        # 处理上次写入完成但来不及清理旧版本或更新任务状态的中断。
+                        self.store.remove_stale_versions(
+                            source, content_hash, fingerprint
+                        )
+                    if on_progress:
+                        on_progress("duplicate", len(chunks), len(chunks))
+                    print_step(
+                        "重复文档已跳过",
+                        来源=source,
+                        已存在来源=existing_source,
+                        内容哈希=content_hash,
+                        片段数量=len(chunks),
+                    )
+                    return 0
+        if on_progress:
+            on_progress("embedding", 0, len(chunks))
+        vectors: list[list[float]] = []
+        texts = [document.page_content for document in chunks]
+        if isinstance(self.embedder, SemanticEmbedder):
+            # 千问适配器内部按接口限制分批，并在整份文档期间复用同一客户端。
+            vectors = self.embedder.embed_documents_with_progress(
+                texts,
+                lambda completed, total: on_progress("embedding", completed, total)
+                if on_progress
+                else None,
+            )
+        else:
+            # 其他嵌入实现仍按小批次处理，避免一次性传入过多文本。
+            batch_size = 10
+            for start in range(0, len(chunks), batch_size):
+                batch = chunks[start : start + batch_size]
+                vectors.extend(
+                    self.embedder.embed_documents(
+                        [document.page_content for document in batch]
+                    )
+                )
+                if on_progress:
+                    on_progress("embedding", len(vectors), len(chunks))
+        if len(vectors) != len(chunks):
+            raise ValueError("嵌入模型返回的向量数量与片段数量不一致")
+        if on_progress:
+            on_progress("indexing", len(chunks), len(chunks))
+        count = self.store.add_documents(chunks, vectors)
+        if on_progress:
+            on_progress("completed", count, count)
         print_step(
             "写入知识库完成",
             存储实现=type(self.store).__name__,
@@ -77,6 +172,14 @@ class RAGService:
             当前片段数=self.store.stats().chunks,
         )
         return count
+
+    def _pipeline_fingerprint(self, content_hash: str, file_format: str) -> str:
+        """把切分策略纳入指纹，配置改变后同一文件会重新建索引。"""
+        strategy = (
+            f"{content_hash}:{file_format}:recursive-heading-v1:"
+            f"{self.settings.chunk_size}:{self.settings.chunk_overlap}"
+        )
+        return sha256(strategy.encode("utf-8")).hexdigest()
 
     def search(self, question: str, top_k: int = 3) -> list[Hit]:
         """按余弦相似度返回最相关的若干片段。"""
