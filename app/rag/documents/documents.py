@@ -5,6 +5,7 @@ from pathlib import Path
 
 from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents import Document
+from app.pdf.loader import NativePdfLoader
 
 
 class UTF8DocumentLoader(BaseLoader):
@@ -50,3 +51,4 @@ class LoaderRegistry:
 loaders = LoaderRegistry()
 loaders.register("txt", UTF8DocumentLoader)
 loaders.register("md", UTF8DocumentLoader)
+loaders.register("pdf", NativePdfLoader)

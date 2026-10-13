@@ -29,6 +29,7 @@ class RAGService:
         settings: Settings | None = None,
     ) -> None:
         self.settings = settings or get_settings()
+        self.last_import_message: str | None = None
         self.embedder = embedder or create_embeddings(
             self.settings, offline=not self.settings.api_key
         )
@@ -48,7 +49,15 @@ class RAGService:
     ) -> int:
         """加载器统一返回 Document，后续流程不依赖文件格式。"""
         with trace_operation("文档导入", 来源=source):
-            documents = loaders.load(source, content)
+            self.last_import_message = None
+            is_pdf = Path(source).suffix.lower() == ".pdf"
+            if is_pdf:
+                from app.pdf.service import prepare_pdf
+
+                documents, message = prepare_pdf(source, content, self.settings)
+                self.last_import_message = message or None
+            else:
+                documents = loaders.load(source, content)
             content_hash = sha256(content).hexdigest()
             pipeline_fingerprint = self._pipeline_fingerprint(
                 content_hash, Path(source).suffix.lower()
@@ -57,7 +66,12 @@ class RAGService:
                 document.metadata["content_hash"] = content_hash
                 document.metadata["pipeline_fingerprint"] = pipeline_fingerprint
             print_step("文档加载完成", 加载器="LoaderRegistry", 文档数量=len(documents))
-            return self.add_documents(documents, on_progress)
+            count = self.add_documents(documents, on_progress)
+            if is_pdf:
+                from app.storage.pdf_repository import PdfRepository
+
+                PdfRepository(self.settings.pdf_directory).mark_indexed(str(documents[0].metadata["pdf_parse_id"]))
+            return count
 
     def add_document(self, source: str, text: str) -> int:
         """程序直接传入文本时也转换为统一文档对象。"""
@@ -91,7 +105,7 @@ class RAGService:
         )
         print_step(
             "文档切分完成",
-            分割器="RecursiveCharacterTextSplitter",
+            分割器="PDF 结构分块" if any(doc.metadata.get("pdf_prechunked") for doc in documents) else "RecursiveCharacterTextSplitter",
             片段数量=len(chunks),
         )
         debug_step("文档切分预览", lambda: {
@@ -138,7 +152,8 @@ class RAGService:
         if on_progress:
             on_progress("embedding", 0, len(chunks))
         vectors: list[list[float]] = []
-        texts = [document.page_content for document in chunks]
+        # PDF 原文用于证据展示；确定性上下文仅用于嵌入，不污染保存的原文。
+        texts = [str(document.metadata.get("_pdf_index_text", document.page_content)) for document in chunks]
         if isinstance(self.embedder, SemanticEmbedder):
             # 语义向量适配器内部按批次处理，并在整份文档期间复用同一客户端。
             vectors = self.embedder.embed_documents_with_progress(
@@ -150,12 +165,9 @@ class RAGService:
         else:
             # 其他嵌入实现仍按小批次处理，避免一次性传入过多文本。
             batch_size = 10
-            for start in range(0, len(chunks), batch_size):
-                batch = chunks[start : start + batch_size]
+            for start in range(0, len(texts), batch_size):
                 vectors.extend(
-                    self.embedder.embed_documents(
-                        [document.page_content for document in batch]
-                    )
+                    self.embedder.embed_documents(texts[start : start + batch_size])
                 )
                 if on_progress:
                     on_progress("embedding", len(vectors), len(chunks))
@@ -163,6 +175,8 @@ class RAGService:
             raise ValueError("嵌入模型返回的向量数量与片段数量不一致")
         if on_progress:
             on_progress("indexing", len(chunks), len(chunks))
+        for document in chunks:
+            document.metadata.pop("_pdf_index_text", None)
         count = self.store.add_documents(chunks, vectors)
         if on_progress:
             on_progress("completed", count, count)
@@ -176,6 +190,15 @@ class RAGService:
 
     def _pipeline_fingerprint(self, content_hash: str, file_format: str) -> str:
         """把切分策略纳入指纹，配置改变后同一文件会重新建索引。"""
+        if file_format == ".pdf":
+            from app.pdf.parser import PARSER_VERSION
+            from app.pdf.chunking import CHUNKER_VERSION
+
+            from app.prompt.prompt import PDF_CONTEXT_VERSION
+
+            return sha256(f"{content_hash}:{PARSER_VERSION}:{CHUNKER_VERSION}:{self.settings.chunk_size}:"
+                          f"{self.settings.pdf_target_size}:{self.settings.pdf_context_mode}:{PDF_CONTEXT_VERSION}:"
+                          f"{self.settings.chat_model if self.settings.pdf_context_mode == 'model' else ''}".encode()).hexdigest()
         strategy = (
             f"{content_hash}:{file_format}:recursive-heading-v1:"
             f"{self.settings.chunk_size}:{self.settings.chunk_overlap}"

@@ -1,15 +1,12 @@
-"""以 SQLite 为唯一队列的持久化后台文档导入。"""
+"""后台导入调度：校验上传、唤醒 Worker、执行解析并反馈任务进度。"""
 
 from __future__ import annotations
 
 import json
 import logging
 import os
-import sqlite3
 import threading
-from collections.abc import Iterator, Sequence
-from contextlib import closing, contextmanager
-from dataclasses import asdict, fields
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path, PureWindowsPath
 from time import monotonic
@@ -21,6 +18,7 @@ from app.rag.documents import loaders
 from app.rag.embeddings import create_embeddings
 from app.rag import RAGService
 from app.schemas import IngestionJob, Settings
+from app.storage.ingestion_repository import IngestionRepository
 
 logger = logging.getLogger(__name__)
 _managers: dict[str, IngestionManager] = {}
@@ -51,82 +49,19 @@ class IngestionManager:
         self.settings = settings
         self.directory = Path(settings.ingestion_directory).resolve()
         self.uploads = self.directory / "uploads"
-        self.database = self.directory / "jobs.sqlite3"
         self.uploads.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        self._initialize_database()
-
-    @contextmanager
-    def _connect(self) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(self.database, timeout=30)
-        connection.row_factory = sqlite3.Row
-        with closing(connection), connection:
-            yield connection
-
-    def _initialize_database(self) -> None:
-        with self._connect() as connection:
-            connection.execute("PRAGMA journal_mode = WAL")
-            connection.execute(
-                """CREATE TABLE IF NOT EXISTS ingestion_jobs (
-                    id TEXT PRIMARY KEY, batch_id TEXT NOT NULL,
-                    filename TEXT NOT NULL, file_size INTEGER NOT NULL,
-                    embedding_mode TEXT NOT NULL DEFAULT 'semantic',
-                    upload_path TEXT NOT NULL, status TEXT NOT NULL,
-                    stage TEXT NOT NULL, progress INTEGER NOT NULL DEFAULT 0,
-                    attempt INTEGER NOT NULL DEFAULT 0,
-                    chunk_count INTEGER NOT NULL DEFAULT 0,
-                    error_message TEXT, result_message TEXT,
-                    settings_json TEXT NOT NULL DEFAULT '{}',
-                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-                )"""
-            )
-            columns = {
-                row["name"] for row in connection.execute("PRAGMA table_info(ingestion_jobs)")
-            }
-            for name, definition in {
-                "result_message": "TEXT",
-                "settings_json": "TEXT NOT NULL DEFAULT '{}'",
-            }.items():
-                if name not in columns:
-                    connection.execute(f"ALTER TABLE ingestion_jobs ADD COLUMN {name} {definition}")
-            connection.execute(
-                "CREATE INDEX IF NOT EXISTS ingestion_queue ON ingestion_jobs(status,created_at)"
-            )
-
-    @staticmethod
-    def _now() -> str:
-        return datetime.now(UTC).isoformat()
-
-    @staticmethod
-    def _snapshot(settings: Settings) -> str:
-        values = asdict(settings)
-        values.pop("api_key")  # 密钥只存在当前进程配置中，不写入任务数据库。
-        return json.dumps(values, ensure_ascii=False)
-
-    @staticmethod
-    def _record(row: sqlite3.Row) -> IngestionJob:
-        values = {field.name: row[field.name] for field in fields(IngestionJob)}
-        for name in ("created_at", "updated_at"):
-            values[name] = datetime.fromisoformat(values[name])
-        return IngestionJob(**values)
+        self.repository = IngestionRepository(self.directory / "jobs.sqlite3")
 
     def start(self) -> None:
         """只在启动或线程退出后恢复任务，不在创建管理器时重置运行中任务。"""
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
                 return
-            with self._connect() as connection:
-                connection.execute(
-                    "UPDATE ingestion_jobs SET status='queued',stage='queued',progress=0,updated_at=? "
-                    "WHERE status='processing'", (self._now(),),
-                )
-                connection.execute(
-                    "UPDATE ingestion_jobs SET settings_json=? WHERE settings_json='{}'",
-                    (self._snapshot(self.settings),),
-                )
+            self.repository.recover(self.settings)
             self._stop.clear()
             self._thread = threading.Thread(target=self._work, name="document-ingestion", daemon=True)
             self._thread.start()
@@ -162,22 +97,17 @@ class IngestionManager:
             prepared.append((filename, content, job_id, self.uploads / f"{job_id}.upload"))
 
         self.start()
-        batch_id, created_at = uuid4().hex, self._now()
+        batch_id, created_at = uuid4().hex, datetime.now(UTC).isoformat()
         try:
             for _, content, _, path in prepared:
                 temporary = path.with_suffix(".tmp")
                 temporary.write_bytes(content)
                 os.replace(temporary, path)
-            with self._connect() as connection:
-                connection.executemany(
-                    """INSERT INTO ingestion_jobs
-                    (id,batch_id,filename,file_size,embedding_mode,upload_path,status,stage,
-                     settings_json,created_at,updated_at)
-                    VALUES (?,?,?,?,?,?,'queued','queued',?,?,?)""",
-                    [(job_id, batch_id, name, len(content), "offline" if offline else "semantic",
-                      str(path), self._snapshot(settings), created_at, created_at)
-                     for name, content, job_id, path in prepared],
-                )
+            self.repository.add_batch([
+                (job_id, batch_id, name, len(content), "offline" if offline else "semantic",
+                 str(path), self.repository.snapshot(settings), created_at, created_at)
+                for name, content, job_id, path in prepared
+            ])
         except Exception:
             for _, _, _, path in prepared:
                 path.unlink(missing_ok=True)
@@ -186,32 +116,17 @@ class IngestionManager:
         self._wake.set()
         return [self.get(job_id) for _, _, job_id, _ in prepared]
 
-    def _get_row(self, job_id: str) -> sqlite3.Row | None:
-        with self._connect() as connection:
-            return connection.execute("SELECT * FROM ingestion_jobs WHERE id=?", (job_id,)).fetchone()
-
     def get(self, job_id: str) -> IngestionJob:
-        row = self._get_row(job_id)
-        if row is None:
+        job = self.repository.get(job_id)
+        if job is None:
             raise JobNotFoundError("找不到该导入任务")
-        return self._record(row)
+        return job
 
     def list_jobs(self, limit: int = 100) -> list[IngestionJob]:
-        with self._connect() as connection:
-            rows = connection.execute(
-                "SELECT * FROM ingestion_jobs ORDER BY created_at DESC LIMIT ?",
-                (max(1, min(limit, 500)),),
-            ).fetchall()
-        return [self._record(row) for row in rows]
+        return self.repository.list_jobs(limit)
 
     def retry(self, job_id: str) -> IngestionJob:
-        with self._connect() as connection:
-            result = connection.execute(
-                """UPDATE ingestion_jobs SET status='queued',stage='queued',progress=0,
-                chunk_count=0,error_message=NULL,result_message=NULL,updated_at=?
-                WHERE id=? AND status='failed'""", (self._now(), job_id),
-            )
-        if not result.rowcount:
+        if not self.repository.retry(job_id):
             self.get(job_id)
             raise ValueError("只有失败任务可以重试")
         self.start()
@@ -219,25 +134,15 @@ class IngestionManager:
         return self.get(job_id)
 
     def cancel(self, job_id: str) -> IngestionJob:
-        with self._connect() as connection:
-            row = connection.execute(
-                "UPDATE ingestion_jobs SET status='cancelled',stage='cancelled',updated_at=? "
-                "WHERE id=? AND status='queued' RETURNING upload_path",
-                (self._now(), job_id),
-            ).fetchone()
-        if row is None:
+        path = self.repository.cancel(job_id)
+        if path is None:
             self.get(job_id)
             raise ValueError("只有尚未开始的排队任务可以取消")
-        self._remove_upload(Path(row["upload_path"]))
+        self._remove_upload(path)
         return self.get(job_id)
 
     def _update(self, job_id: str, **changes: object) -> None:
-        assignments = ",".join(f"{key}=?" for key in changes)
-        with self._connect() as connection:
-            connection.execute(
-                f"UPDATE ingestion_jobs SET {assignments},updated_at=? WHERE id=?",
-                [*changes.values(), self._now(), job_id],
-            )
+        self.repository.update(job_id, **changes)
 
     def _work(self) -> None:
         failure: tuple[str, Exception] | None = None
@@ -247,12 +152,8 @@ class IngestionManager:
                 if failure is not None:
                     self._fail(*failure)
                     failure = None
-                with self._connect() as connection:
-                    row = connection.execute(
-                        "SELECT id FROM ingestion_jobs WHERE status='queued' ORDER BY created_at LIMIT 1"
-                    ).fetchone()
-                if row is not None:
-                    job_id = row["id"]
+                job_id = self.repository.next_queued_id()
+                if job_id is not None:
                     self._process(job_id)
                     continue
             except Exception as exc:
@@ -263,12 +164,7 @@ class IngestionManager:
             self._wake.clear()
 
     def _process(self, job_id: str) -> None:
-        with self._connect() as connection:
-            row = connection.execute(
-                "UPDATE ingestion_jobs SET status='processing',stage='loading',progress=5,"
-                "attempt=attempt+1,error_message=NULL,updated_at=? "
-                "WHERE id=? AND status='queued' RETURNING *", (self._now(), job_id),
-            ).fetchone()
+        row = self.repository.claim(job_id)
         if row is None:
             return
         try:
@@ -293,11 +189,12 @@ class IngestionManager:
                 last_stage, last_progress, last_time = stage, value, now
 
             count = service.add_file(row["filename"], path.read_bytes(), progress)
+            import_message = getattr(service, "last_import_message", None)
             self._update(
                 job_id, status="completed" if count else "skipped",
                 stage="completed" if count else "duplicate", progress=100,
                 chunk_count=count, error_message=None,
-                result_message=None if count else "知识库中已有相同内容和解析配置，已跳过重复导入。",
+                result_message=(import_message if isinstance(import_message, str) else None) if count else "知识库中已有相同内容和解析配置，已跳过重复导入。",
             )
             self._remove_upload(path)
         except Exception as exc:
@@ -313,11 +210,7 @@ class IngestionManager:
             message = str(exc)
         else:
             message = f"处理失败（{type(exc).__name__}），可重试或检查服务端日志"
-        with self._connect() as connection:
-            connection.execute(
-                "UPDATE ingestion_jobs SET status='failed',stage='failed',error_message=?,updated_at=? "
-                "WHERE id=? AND status IN ('queued','processing')", (message, self._now(), job_id),
-            )
+        self.repository.fail(job_id, message)
 
     @staticmethod
     def _remove_upload(path: Path) -> None:

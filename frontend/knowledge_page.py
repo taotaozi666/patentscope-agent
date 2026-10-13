@@ -44,7 +44,7 @@ def _render_documents(documents: list[DocumentRecord]) -> None:
                 key=f"knowledge_open_{doc.id}",
                 on_click=_open_document,
                 args=(doc.id,),
-                use_container_width=True,
+                width="stretch",
             )
             if doc.title:
                 st.text(doc.title)
@@ -57,7 +57,7 @@ def _render_documents(documents: list[DocumentRecord]) -> None:
 
 def _render_chunk_table(records: list[ChunkRecord]) -> None:
     """普通 HTML 表格让每行随原文增高，保留换行且不截断文本。"""
-    columns = ["文本", "片段编号", "字符数", "章节路径", "向量长度", "片段 ID", "导入时间"]
+    columns = ["文本", "片段编号", "字符数", "章节路径", "PDF 页码", "向量长度", "片段 ID", "导入时间"]
     rows = []
     for record in records:
         values = [
@@ -65,6 +65,7 @@ def _render_chunk_table(records: list[ChunkRecord]) -> None:
             record.chunk,
             len(record.text),
             record.metadata.get("heading_path", ""),
+            f"{record.metadata['page_start']}–{record.metadata['page_end']}" if "page_start" in record.metadata else "",
             record.metadata.get("vector_dimensions", "未记录"),
             record.id,
             _local_time(record.created_at),
@@ -143,6 +144,10 @@ def _render_document(store: KnowledgeStore, document: DocumentRecord) -> None:
         key="knowledge_record_id",
     )
     record = next(r for r in result.items if r.id == record_id)
+    if record.metadata.get("pdf_chunk_id"):
+        from frontend.pdf_components import render_pdf_sources
+
+        render_pdf_sources(record.metadata)
     with st.expander("查看完整元数据"):
         st.json(record.metadata, expanded=False)
     with st.expander("查看向量数据"):

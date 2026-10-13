@@ -61,6 +61,11 @@ def split_documents(
         raise ValueError("重叠长度必须非负且小于分块长度")
     result = []
     for document in documents:
+        if document.metadata.get("pdf_prechunked"):
+            # PDF 已按结构切片；再次递归切分会破坏字符到来源位置的映射。
+            result.append(Document(page_content=document.page_content,
+                                   metadata={**document.metadata, "chunk": len(result) + 1}))
+            continue
         is_markdown = document.metadata.get("format", ".txt") == ".md"
         sections = (
             _markdown_paragraphs(document.page_content)

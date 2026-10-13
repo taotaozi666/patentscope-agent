@@ -34,7 +34,7 @@ def _format_time(job: IngestionJob) -> str:
 def _render_jobs(manager: IngestionManager) -> None:
     jobs = manager.list_jobs(100)
     if not jobs:
-        st.info("还没有导入任务。上传 TXT 或 Markdown 文档开始处理。")
+        st.info("还没有导入任务。上传 TXT、Markdown 或原生 PDF 开始处理。")
         return
 
     completed = sum(job.status == "completed" for job in jobs)
@@ -63,6 +63,8 @@ def _render_jobs(manager: IngestionManager) -> None:
             )
             if job.status == "completed":
                 st.success(f"已写入 {job.chunk_count} 个片段，可在知识库问答页提问。")
+                if job.result_message:
+                    st.warning(job.result_message)
             elif job.status == "skipped":
                 st.info(job.result_message or "内容已存在，跳过重复导入。")
             elif job.status == "failed":
@@ -87,10 +89,10 @@ def render_ingestion_page(
     uploader_generation = st.session_state.setdefault("ingestion_uploader_generation", 0)
     manager = get_ingestion_manager(settings)
     st.caption(
-        "当前版本支持 UTF-8 TXT 和 Markdown。可一次选择多个文件；提交后向量解析在后台逐文件执行。"
+        "支持 UTF-8 TXT、Markdown 和原生文本 PDF。PDF 最小版保留页码/位置，支持普通表格；扫描件需要 OCR，图片理解尚未启用。可一次选择多个文件。"
     )
     uploads = st.file_uploader(
-        "选择一个或多个 TXT / Markdown 文档",
+        "选择一个或多个 TXT / Markdown / PDF 文档",
         type=loaders.extensions,
         accept_multiple_files=True,
         key=f"ingestion_files_{uploader_generation}",

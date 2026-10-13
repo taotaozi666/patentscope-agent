@@ -95,7 +95,7 @@ class ChromaKnowledgeStore:
                 # 同一路径的同一版本沿用文档和片段 ID，重试时用 upsert 覆盖半成品。
                 document_id = document_ids.setdefault(
                     source_key,
-                    uuid5(NAMESPACE_URL, f"{self.collection_name}:{source_key}").hex,
+                    str(document.metadata.get("document_id") or uuid5(NAMESPACE_URL, f"{self.collection_name}:{source_key}").hex),
                 )
                 chunk_number = int(document.metadata.get("chunk", index))
                 record_id = uuid5(

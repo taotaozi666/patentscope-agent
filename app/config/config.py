@@ -46,6 +46,12 @@ def get_settings(
         raise ValueError("LOG_LEVEL 必须为 DEBUG、INFO、WARNING 或 ERROR")
     chunk_size = int(config.get("CHUNK_SIZE", "600"))
     chunk_overlap = int(config.get("CHUNK_OVERLAP", "100"))
+    pdf_target_size = int(config.get("PDF_TARGET_SIZE", "0"))
+    pdf_context_mode = config.get("PDF_CONTEXT_MODE", "rule").lower()
+    if not 0 <= pdf_target_size <= chunk_size:
+        raise ValueError("PDF_TARGET_SIZE 必须介于 0 和 CHUNK_SIZE 之间，0 表示自动使用上限的 80%")
+    if pdf_context_mode not in {"rule", "model"}:
+        raise ValueError("PDF_CONTEXT_MODE 必须为 rule 或 model")
     if not 0 <= chunk_overlap < chunk_size:
         raise ValueError("CHUNK_OVERLAP 必须非负且小于 CHUNK_SIZE")
     max_files = int(config.get("INGESTION_MAX_FILES", "20"))
@@ -64,8 +70,14 @@ def get_settings(
     ).expanduser()
     if not ingestion_directory.is_absolute():
         ingestion_directory = Path(env_file).resolve().parent / ingestion_directory
+    pdf_directory = Path(config.get("PDF_DIRECTORY", ".documents")).expanduser()
+    if not pdf_directory.is_absolute():
+        pdf_directory = Path(env_file).resolve().parent / pdf_directory
     return Settings(
         api_key=config.first("DASHSCOPE_API_KEY", "API_KEY"),
+        pdf_directory=str(pdf_directory.resolve()),
+        pdf_target_size=pdf_target_size,
+        pdf_context_mode=pdf_context_mode,
         chat_model=config.first("CHAT_MODEL", "MODEL", default="qwen3.8-max"),
         embedding_model=config.get("EMBEDDING_MODEL", "qwen3.7-text-embedding"),
         embedding_concurrency=embedding_concurrency,

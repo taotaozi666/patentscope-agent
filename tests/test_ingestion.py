@@ -30,6 +30,13 @@ class IngestionTests(unittest.TestCase):
         self.manager.stop()
         self.temporary.cleanup()
 
+    def get_row(self, manager, job_id):
+        row = manager.repository.get_row(job_id)
+        self.assertIsNotNone(row)
+        if row is None:
+            self.fail("导入任务不存在")
+        return row
+
     def submit(self, files=None, settings=None):
         with patch.object(self.manager, "start"):
             return self.manager.submit_batch(
@@ -67,7 +74,7 @@ class IngestionTests(unittest.TestCase):
             self.manager._process(job.id)
             factory.assert_not_called()
         self.assertEqual(self.manager.get(job.id).status, "cancelled")
-        self.assertFalse(Path(self.manager._get_row(job.id)["upload_path"]).exists())
+        self.assertFalse(Path(self.get_row(self.manager, job.id)["upload_path"]).exists())
 
     def test_claimed_task_cannot_be_cancelled(self):
         job = self.submit()[0]
@@ -107,12 +114,15 @@ class IngestionTests(unittest.TestCase):
                 self.assertTrue(finished.wait(timeout=5))
                 self.assertEqual(self.manager.get(first.id).status, "failed")
                 self.assertEqual(self.manager.get(second.id).status, "completed")
+                self.assertIsNotNone(self.manager._thread)
+                if self.manager._thread is None:
+                    self.fail("后台线程未启动")
                 self.assertTrue(self.manager._thread.is_alive())
                 self.manager.stop()
 
     def test_configuration_snapshot_survives_changes_and_retry(self):
         job = self.submit()[0]
-        snapshot = self.manager._get_row(job.id)["settings_json"]
+        snapshot = self.get_row(self.manager, job.id)["settings_json"]
         self.assertNotIn(self.settings.api_key, snapshot)
         self.assertNotIn("api_key", json.loads(snapshot))
         self.manager.settings = replace(self.settings, api_key="replacement-key", chunk_size=80,
@@ -137,12 +147,12 @@ class IngestionTests(unittest.TestCase):
             reopened._process(job.id)
         result = self.manager.get(job.id)
         self.assertEqual((result.status, result.attempt, result.chunk_count), ("completed", 2, 2))
-        self.assertEqual(self.manager._get_row(job.id)["settings_json"], snapshot)
+        self.assertEqual(self.get_row(self.manager, job.id)["settings_json"], snapshot)
 
     def test_legacy_schema_and_restart_recovery(self):
         job = self.submit()[0]
         self.manager._update(job.id, status="processing", stage="embedding")
-        with self.manager._connect() as connection:
+        with self.manager.repository.connect() as connection:
             connection.execute("ALTER TABLE ingestion_jobs DROP COLUMN settings_json")
             connection.execute("ALTER TABLE ingestion_jobs DROP COLUMN result_message")
         reopened = IngestionManager(self.settings)
@@ -150,7 +160,7 @@ class IngestionTests(unittest.TestCase):
         with patch("app.ingestion.ingestion.threading.Thread"):
             reopened.start()
         self.assertEqual(reopened.get(job.id).status, "queued")
-        self.assertEqual(json.loads(reopened._get_row(job.id)["settings_json"])["chunk_size"], 40)
+        self.assertEqual(json.loads(self.get_row(reopened, job.id)["settings_json"])["chunk_size"], 40)
 
     def test_failed_submission_cleans_temporary_files(self):
         with patch.object(self.manager, "start"), patch("app.ingestion.ingestion.os.replace", side_effect=OSError):

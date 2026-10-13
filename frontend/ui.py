@@ -17,6 +17,7 @@ from app.trace import configure_logging, debug_step, print_step, trace_operation
 from frontend.chat_components import render_message
 from frontend.ingestion_page import render_ingestion_page
 from frontend.knowledge_page import render_knowledge_page
+from frontend.quality_page import render_quality_page
 
 logger = logging.getLogger("frontend.ui")
 # 每次页面重新执行都会读取最新配置，密钥不进入页面控件。
@@ -30,13 +31,18 @@ if st.session_state.get("current_page") == "聊天":
 st.set_page_config(
     page_title="RAG 知识库问答",
     page_icon="📚",
-    layout="wide" if st.session_state.get("current_page") == "知识库查询" else "centered",
+    layout="wide" if st.session_state.get("current_page") in {"知识库查询", "解析检查"} else "centered",
 )
 page = st.sidebar.radio(
-    "页面", ["知识库问答", "知识库查询", "导入任务"], key="current_page"
+    "页面", ["知识库问答", "知识库查询", "导入任务", "解析检查"], key="current_page"
 )
-st.title({"知识库问答": "📚 RAG 知识库问答", "知识库查询": "📋 知识库查询", "导入任务": "📥 文档导入任务"}[page])
+st.title({"知识库问答": "📚 RAG 知识库问答", "知识库查询": "📋 知识库查询", "导入任务": "📥 文档导入任务", "解析检查": "🔎 PDF 解析检查"}[page])
 st.caption("上传文档后提问。知识库由 Chroma 保存到本地，聊天记录保存在当前会话内存。")
+
+# 解析检查仅依赖文档资产；即使向量服务初始化失败，也能复核已保存的解析结果。
+if page == "解析检查":
+    render_quality_page(settings)
+    st.stop()
 
 with st.sidebar:
     st.header("设置")
