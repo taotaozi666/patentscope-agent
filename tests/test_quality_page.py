@@ -37,7 +37,9 @@ class QualityPageTests(unittest.TestCase):
             app.selectbox(key=f"quality_patent_{run_id}").select("claim:8").run()
             self.assertFalse(app.exception)
             self.assertEqual(app.selectbox(key=f"quality_page_{report.id}_claim:8").value, 2)
-            self.assertEqual(len(app.image), 1)
+            captions = [image.caption for item in app.image for image in item.proto.imgs]
+            self.assertIn("物理第 2 页；红框为所选问题的来源区域。", captions)
+            self.assertTrue(any("区域裁图" in caption for caption in captions))
             self.assertFalse(any("页码标签：无" in caption.value for caption in app.caption))
             self.assertTrue(any("版面页码" in caption.value for caption in app.caption))
             self.assertTrue(any("权利要求" in text.value for text in app.text))
@@ -62,7 +64,10 @@ class QualityPageTests(unittest.TestCase):
             self.assertFalse(app.exception)
             app.button[0].click().run()
             self.assertFalse(app.exception)
-            self.assertEqual(len(app.image), 1)
+            captions = [image.caption for item in app.image for image in item.proto.imgs]
+            self.assertEqual(len(captions), 2)
+            self.assertIn("物理第 1 页；红框为所选问题的来源区域。", captions)
+            self.assertIn("第 1 页 · table 区域裁图", captions)
             report = QualityRepository(directory).latest(chunks[0].metadata["pdf_parse_id"])
             if report is None:
                 self.fail("历史报告未生成")

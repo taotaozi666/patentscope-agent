@@ -109,7 +109,7 @@ class StorageTests(unittest.TestCase):
         self.assertIs(rag.store, self.store)
         record = self.store.query().items[0]
         self.assertEqual(record.metadata["format"], ".md")
-        self.assertEqual(record.metadata["heading_path"], "# 标题")
+        self.assertEqual(record.metadata["heading_path"], "标题")
         self.assertEqual(record.metadata["document_title"], "标题")
         self.assertEqual(record.text, "知识库保存文档。")
         self.assertEqual(rag.search("知识库")[0].source, "测试.md")
@@ -140,11 +140,11 @@ class StorageTests(unittest.TestCase):
             rag.add_file(
                 "city.md", "# 城市总标题\n\n## 云朵失物招领\n\n章节正文".encode()
             )
-        self.assertEqual(embed.call_args.args[0], ["## 云朵失物招领\n\n章节正文"])
+        self.assertEqual(embed.call_args.args[0], ["云朵失物招领\n\n章节正文"])
         record = self.store.query().items[0]
         self.assertEqual(record.metadata["document_title"], "城市总标题")
         self.assertEqual(
-            record.metadata["heading_path"], "# 城市总标题\n## 云朵失物招领"
+            record.metadata["heading_path"], "城市总标题\n云朵失物招领"
         )
 
     def test_browsing_loads_only_target_page_without_vectors(self):

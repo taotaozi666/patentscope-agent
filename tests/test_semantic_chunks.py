@@ -47,7 +47,9 @@ class SemanticChunkTests(unittest.TestCase):
         parent = next(parent for parent in parsed.objects if parent.kind == "claim" and parent.payload["claim_number"] == 1)
         children = [chunk for chunk in chunks if chunk.metadata["parent_id"] == parent.id]
         self.assertEqual({span.page_no for span in parent.spans}, {2,3})
-        self.assertEqual("".join(chunk.page_content for chunk in children), parent.raw_content)
+        self.assertEqual("".join(chunk.metadata["_pdf_raw_content"] for chunk in children), parent.raw_content)
+        self.assertEqual("".join(chunk.page_content for chunk in children),
+                         "1.一种检索方法，包括接收问题；再检索资料并返回结果。")
         dependent = next(chunk for chunk in chunks if chunk.metadata.get("claim_number") == 3)
         self.assertEqual(json.loads(dependent.metadata["depends_on"]), [1,2])
 

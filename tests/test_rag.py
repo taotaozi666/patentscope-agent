@@ -31,9 +31,9 @@ class RAGTests(unittest.TestCase):
         self.assertEqual(
             split_into_chunks(text),
             [
-                "## 04．雨伞大学\n\n第一段正文。",
-                "## 04．雨伞大学\n\n第二段正文。",
-                "## 石头商店\n\n第三段正文。",
+                "04．雨伞大学\n\n第一段正文。",
+                "04．雨伞大学\n\n第二段正文。",
+                "石头商店\n\n第三段正文。",
             ],
         )
 
@@ -41,8 +41,8 @@ class RAGTests(unittest.TestCase):
         self.assertEqual(
             split_into_chunks("## T\n\nabcdefghijklmnop", 16, 2),
             [
-                "## T\n\nabcdefghij",
-                "## T\n\nijklmnop",
+                "T\n\nabcdefghijklm",
+                "T\n\nlmnop",
             ],
         )
         self.assertTrue(
@@ -58,8 +58,8 @@ class RAGTests(unittest.TestCase):
         self.assertEqual(
             split_into_chunks("## 标题\n正文\n### 子标题\n更多正文"),
             [
-                "## 标题\n\n正文",
-                "## 标题\n### 子标题\n\n更多正文",
+                "标题\n\n正文",
+                "标题\n子标题\n\n更多正文",
             ],
         )
         self.assertEqual(

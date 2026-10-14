@@ -14,6 +14,7 @@ from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
 from app.schemas import ChunkRecord, DocumentRecord, QueryResult, Settings, StoreStats
+from app.patent_identifiers import normalize_publication_number
 from app.trace import print_step
 
 
@@ -46,7 +47,8 @@ class KnowledgeStore(Protocol):
     ) -> QueryResult: ...
     def get(self, record_id: str) -> ChunkRecord | None: ...
     def nearest(
-        self, vector: list[float], top_k: int
+        self, vector: list[float], top_k: int,
+        publication_numbers: list[str] | None = None,
     ) -> list[tuple[ChunkRecord, float]]: ...
     def clear(self) -> None: ...
 
@@ -88,14 +90,14 @@ class ChromaKnowledgeStore:
         prepared = []
         for index, document in enumerate(documents, 1):
             source = str(document.metadata.get("source", "未知来源"))
-            source_key = source.replace("\\", "/").rsplit("/", 1)[-1].casefold()
+            source_key = source.replace("\\", "/").casefold()
             content_hash = document.metadata.get("content_hash")
             pipeline_fingerprint = document.metadata.get("pipeline_fingerprint")
             if content_hash and pipeline_fingerprint:
-                # 同一路径的同一版本沿用文档和片段 ID，重试时用 upsert 覆盖半成品。
+                # 来源和内容共同决定文档身份；同名不同内容独立保存。
                 document_id = document_ids.setdefault(
-                    source_key,
-                    str(document.metadata.get("document_id") or uuid5(NAMESPACE_URL, f"{self.collection_name}:{source_key}").hex),
+                    f"{source_key}:{content_hash}",
+                    str(document.metadata.get("document_id") or uuid5(NAMESPACE_URL, f"{self.collection_name}:{source_key}:{content_hash}").hex),
                 )
                 chunk_number = int(document.metadata.get("chunk", index))
                 record_id = uuid5(
@@ -116,6 +118,13 @@ class ChromaKnowledgeStore:
                 "chunk": document.metadata.get("chunk", index),
                 "chunk_total": len(documents),
             }
+            number = normalize_publication_number(str(metadata.get("publication_number", "")))
+            if not number:
+                # TXT/Markdown 的公开号可由完整文件名确定，避免用任意正文猜测对象。
+                filename = source.replace("\\", "/").rsplit("/", 1)[-1]
+                number = normalize_publication_number(filename.rsplit(".", 1)[0])
+            if number:
+                metadata["publication_number"] = number
             if embeddings is not None:
                 metadata["vector_dimensions"] = len(embeddings[index - 1])
             prepared.append(
@@ -172,12 +181,10 @@ class ChromaKnowledgeStore:
                         metadatas=[doc.metadata for doc in batch],
                     )
             if has_stable_ids:
-                source = str(prepared[0].metadata["source"])
-                content_hash = str(prepared[0].metadata["content_hash"])
-                pipeline_fingerprint = str(
-                    prepared[0].metadata["pipeline_fingerprint"]
-                )
-                self.remove_stale_versions(source, content_hash, pipeline_fingerprint)
+                versions = {(str(doc.metadata["source"]), str(doc.metadata["content_hash"]),
+                             str(doc.metadata["pipeline_fingerprint"])) for doc in prepared}
+                for source, content_hash, pipeline_fingerprint in versions:
+                    self.remove_stale_versions(source, content_hash, pipeline_fingerprint)
         except Exception:
             # 多批写入途中失败时，回滚本次导入已写入的片段。
             self.collection.delete(ids=ids)
@@ -228,8 +235,8 @@ class ChromaKnowledgeStore:
         return str(metadatas[0].get("source", "")) if metadatas else None
 
     def has_source(self, source: str) -> bool:
-        """检查同名逻辑文件是否已存在，用于提示可能的版本更新。"""
-        source_key = source.replace("\\", "/").rsplit("/", 1)[-1].casefold()
+        """检查同名文件是否存在，仅用于提示；同名不代表同一内容。"""
+        source_key = source.replace("\\", "/").casefold()
         filters: tuple[Where, Where] = (
             {"source_key": {"$eq": source_key}},
             {"source": {"$eq": source}},
@@ -243,24 +250,14 @@ class ChromaKnowledgeStore:
     def remove_stale_versions(
         self, source: str, content_hash: str, pipeline_fingerprint: str
     ) -> None:
-        """新版本写全后清除同一逻辑文件的旧版本与历史遗留片段。"""
-        source_key = source.replace("\\", "/").rsplit("/", 1)[-1].casefold()
-        records_by_id: dict[str, Metadata] = {}
-        filters: tuple[Where, Where] = (
-            {"source_key": {"$eq": source_key}},
-            {"source": {"$eq": source}},
-        )
-        for where in filters:
-            result = self.collection.get(where=where, include=["metadatas"])
-            for record_id, metadata in zip(
-                result["ids"], result["metadatas"] or []
-            ):
-                records_by_id[record_id] = metadata
+        """只清理同一来源、同一内容的旧解析配置，保留同名的其他内容。"""
+        source_key = source.replace("\\", "/").casefold()
+        result = self.collection.get(where={"content_hash": {"$eq": content_hash}}, include=["metadatas"])
         stale_ids = [
             record_id
-            for record_id, metadata in records_by_id.items()
-            if metadata.get("content_hash") != content_hash
-            or metadata.get("pipeline_fingerprint") != pipeline_fingerprint
+            for record_id, metadata in zip(result["ids"], result["metadatas"] or [])
+            if str(metadata.get("source", "")).replace("\\", "/").casefold() == source_key
+            and metadata.get("pipeline_fingerprint") != pipeline_fingerprint
         ]
         if stale_ids:
             self.collection.delete(ids=stale_ids)
@@ -395,9 +392,18 @@ class ChromaKnowledgeStore:
         return records[0] if records else None
 
     def nearest(
-        self, vector: list[float], top_k: int
+        self, vector: list[float], top_k: int,
+        publication_numbers: list[str] | None = None,
     ) -> list[tuple[ChunkRecord, float]]:
         count = self.collection.count()
+        where: Where | None = None
+        if publication_numbers is not None:
+            numbers = list(dict.fromkeys(normalize_publication_number(number) for number in publication_numbers))
+            numbers = [number for number in numbers if number]
+            if not numbers:
+                return []
+            where = {"publication_number": {"$in": numbers}}
+            count = len(self.collection.get(where=where, include=[])["ids"])
         if not count or top_k <= 0:
             return []
         print_step(
@@ -410,6 +416,7 @@ class ChromaKnowledgeStore:
         result = self.collection.query(
             query_embeddings=[vector],
             n_results=min(top_k, count),
+            where=where,
             include=["documents", "metadatas", "distances"],
         )
         if any(

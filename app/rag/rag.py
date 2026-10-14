@@ -1,6 +1,7 @@
 """LangChain 文档导入、Chroma 检索与回答生成。"""
 
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
 import re
@@ -14,14 +15,15 @@ from app.rag.documents import loaders, split_documents
 from app.rag.embeddings import DemoEmbedder, SemanticEmbedder, create_embeddings
 from app.history import ChatHistory, as_history
 from app.models import generate_reply
+from app.patent_identifiers import publication_numbers
 from app import prompt
 from app.schemas import ChatMessage, ChunkRecord, Hit, Settings
 from app.storage import KnowledgeStore, create_store
 from app.trace import debug_step, print_step, trace_operation
 
 
-_PATENT_OVERVIEW = re.compile(r"专利|发明名称|申请公布号|申请人|发明人|技术内容|技术方案|专利简介|专利介绍")
-_PUBLICATION_NUMBER = re.compile(r"CN\s*\d{6,12}\s*[A-CUSY](?:\d)?", re.IGNORECASE)
+_PATENT_OVERVIEW = re.compile(r"介绍|简介|概述|总结|摘要|发明名称|申请公布号|申请人|发明人|技术内容|技术方案")
+_PATENT_DETAIL = re.compile(r"权利要求|第\s*\d+\s*[项条]|图\s*\d+|表\s*\d+|实施例|步骤|参数|数值")
 _PATENT_OVERVIEW_QUERY = "专利著录信息 发明名称 摘要 技术领域 发明内容 技术方案 申请人 发明人 申请日 申请公布日 国际分类号"
 
 
@@ -39,6 +41,9 @@ class RAGService:
         self.embedder = embedder or create_embeddings(
             self.settings, offline=not self.settings.api_key
         )
+        if isinstance(self.embedder, DemoEmbedder):
+            # 离线检索也约束 PDF 处理，配置了密钥时仍不调用模型增强。
+            self.settings = replace(self.settings, api_key="", pdf_context_mode="rule")
         self.store = (
             store
             if store is not None
@@ -130,12 +135,8 @@ class RAGService:
                 )
                 if existing_source is not None:
                     source = str(chunks[0].metadata.get("source", ""))
-                    source_key = source.replace("\\", "/").rsplit("/", 1)[
-                        -1
-                    ].casefold()
-                    existing_source_key = existing_source.replace("\\", "/").rsplit(
-                        "/", 1
-                    )[-1].casefold()
+                    source_key = source.replace("\\", "/").casefold()
+                    existing_source_key = existing_source.replace("\\", "/").casefold()
                     if source_key == existing_source_key:
                         # 处理上次写入完成但来不及清理旧版本或更新任务状态的中断。
                         self.store.remove_stale_versions(
@@ -222,17 +223,20 @@ class RAGService:
             top_k=top_k,
             知识库片段数=count,
         )
-        overview_query = bool(_PATENT_OVERVIEW.search(question))
-        publication_match = _PUBLICATION_NUMBER.search(question)
+        numbers = publication_numbers(question)
+        overview_query = (bool(_PATENT_OVERVIEW.search(question))
+                          and not _PATENT_DETAIL.search(question)
+                          and bool(numbers or re.search(r"专利|发明名称|申请公布号|申请人|发明人", question)))
         queries = [question]
         if overview_query:
-            number = publication_match.group(0) if publication_match else ""
-            queries.append(f"{number} {_PATENT_OVERVIEW_QUERY}".strip())
+            queries.append(f"{' '.join(numbers)} {_PATENT_OVERVIEW_QUERY}".strip())
         candidate_limit = min(count, top_k * (3 if overview_query else 1))
         candidates: dict[str, tuple[ChunkRecord, float]] = {}
         for query_text in queries:
             query = self.embedder.embed_query(query_text)
-            for record, score in self.store.nearest(query, candidate_limit):
+            matches = (self.store.nearest(query, candidate_limit, publication_numbers=numbers)
+                       if numbers else self.store.nearest(query, candidate_limit))
+            for record, score in matches:
                 key = record.id
                 previous = candidates.get(key)
                 if previous is None or score > previous[1]:
@@ -244,8 +248,6 @@ class RAGService:
                 metadata = record.metadata
                 section = str(metadata.get("patent_section", "")).lower()
                 boost = {"cover": .10, "abstract": .08, "claims": .025}.get(section, 0.0)
-                if publication_match and str(metadata.get("publication_number", "")).casefold().replace(" ", "") == publication_match.group(0).casefold().replace(" ", ""):
-                    boost += .12
                 return (score + boost, score)
             ranked = sorted(candidates.values(), key=patent_priority, reverse=True)
         else:
@@ -255,7 +257,7 @@ class RAGService:
         print_step(
             "检索结果",
             结果数量=len(hits),
-            排序依据="向量相似度；专利介绍问题优先著录信息、摘要和匹配公开号",
+            排序依据="指定公开号限定范围；概览问题优先著录信息与摘要，其余按向量相似度",
         )
         debug_step("检索原文", lambda: {
             "片段": [

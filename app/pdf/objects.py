@@ -11,8 +11,8 @@ OBJECT_VERSION = "semantic-objects-v2"
 
 
 def build_objects(parsed: ParsedPdf) -> list[SemanticObject]:
-    source_key = parsed.source.replace("\\", "/").rsplit("/", 1)[-1].casefold()
-    document_id = uuid5(NAMESPACE_URL, f"pdf:{source_key}").hex
+    source_key = parsed.source.replace("\\", "/").casefold()
+    document_id = uuid5(NAMESPACE_URL, f"pdf:{source_key}:{parsed.content_hash}").hex
     run = f"{parsed.content_hash}:{parsed.source}:{parsed.parser_version}"
     result: list[SemanticObject] = []
     by_id = {element.id: element for element in parsed.elements}

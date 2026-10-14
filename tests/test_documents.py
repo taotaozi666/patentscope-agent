@@ -37,12 +37,12 @@ class DocumentTests(unittest.TestCase):
             "# 城市\n## 云朵\n### 招领\n正文\n# 另一座城\n新正文".encode(),
         )
         chunks = split_documents(documents)
-        self.assertEqual(chunks[0].page_content, "## 云朵\n### 招领\n\n正文")
+        self.assertEqual(chunks[0].page_content, "云朵\n招领\n\n正文")
         self.assertEqual(chunks[0].metadata["document_title"], "城市")
         self.assertEqual(
-            chunks[0].metadata["heading_path"], "# 城市\n## 云朵\n### 招领"
+            chunks[0].metadata["heading_path"], "城市\n云朵\n招领"
         )
-        self.assertEqual(chunks[0].metadata["section_path"], "## 云朵\n### 招领")
+        self.assertEqual(chunks[0].metadata["section_path"], "云朵\n招领")
         self.assertEqual(chunks[1].page_content, "新正文")
         self.assertEqual(chunks[1].metadata["document_title"], "另一座城")
         self.assertNotIn("section_path", chunks[1].metadata)

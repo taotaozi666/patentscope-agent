@@ -125,8 +125,8 @@ def render_ingestion_page(
                         kind = "duplicate"
                         detail = f"与知识库中的“{existing_source}”内容相同，后台会检查完整性"
                     elif store.has_source(upload.name):
-                        kind = "update"
-                        detail = "知识库已有同名文件，成功导入后会替换旧内容"
+                        kind = "same_name"
+                        detail = "知识库已有同名文件，将独立保存并保留已有内容"
                     else:
                         kind = "new"
                         detail = "新文件"
@@ -137,7 +137,7 @@ def render_ingestion_page(
         flagged = False
         with st.container(border=True):
             st.markdown("**导入检查与提交选择**")
-            st.caption("相同内容会自动跳过；同名文件内容有变化时会在新内容写入成功后替换旧片段。可取消勾选不想提交的文件。")
+            st.caption("相同内容和解析配置会自动跳过；同名但内容不同的文件会独立保存。可取消勾选不想提交的文件。")
             for index, (upload, item) in enumerate(zip(uploads, preview["items"])):
                 kind = item["kind"]
                 label = f"提交：{upload.name} — {item['detail']}"

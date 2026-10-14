@@ -8,6 +8,7 @@ from typing import Protocol
 from openai.types.chat import ChatCompletionMessageParam
 
 from app.schemas import ChatMessage, Hit
+from app.patent_identifiers import publication_numbers
 
 
 class ChatHistory:
@@ -63,6 +64,8 @@ class ChatHistory:
 
     def retrieval_question(self, question: str) -> str:
         """短问题或指代问题追加最近两个用户问题，沿用原有追问规则。"""
+        if publication_numbers(question):
+            return question  # 新问题明确指定专利时，不带入之前的其他专利号。
         recent = self.recent_questions()
         if recent and (
             len(question) < 12

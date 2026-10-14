@@ -3,6 +3,7 @@
 import json
 import unittest
 import time
+from unittest.mock import patch
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -40,6 +41,53 @@ def native_fixture(table: bool = False, rotated: bool = False) -> bytes:
 
 
 class PdfTests(unittest.TestCase):
+    def test_image_ocr_keeps_all_blocks_and_does_not_duplicate_native_text(self):
+        with pymupdf.open(stream=native_fixture(), filetype="pdf") as source:
+            image = source[0].get_pixmap().tobytes("png")
+        with pymupdf.open() as document:
+            page = document.new_page(width=500, height=600)
+            page.insert_text((50, 50), "Native page heading")
+            page.insert_image((50, 100, 250, 300), stream=image, keep_proportion=False)
+            page.insert_image((280, 100, 480, 300), stream=image, keep_proportion=False)
+            page.insert_text((300, 130), "Native image text")
+            content = document.tobytes()
+        blocks = [((60, 120, 200, 140), "First OCR block"),
+                  ((60, 160, 200, 180), "Second OCR block"),
+                  ((300, 120, 460, 140), "Duplicate OCR text")]
+        with patch("app.pdf.parser._ocr_blocks", return_value=blocks) as ocr:
+            parsed = parse_pdf("images.pdf", content)
+        ocr.assert_called_once()
+        images = [element for element in parsed.elements if element.kind == "image"]
+        recognized = next(element for element in images if element.payload["text_origin"] == "ocr")
+        self.assertEqual(recognized.text, "First OCR block\nSecond OCR block")
+        native = next(element for element in images if element.payload["text_origin"] == "native")
+        self.assertEqual(native.text, "Native image text")
+        self.assertNotIn("Duplicate OCR text", "\n".join(element.text for element in parsed.elements))
+
+    def test_offline_pdf_worker_skips_model_context_even_with_key(self):
+        with TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+            settings = Settings(api_key="configured-key", chat_model="chat", embedding_model="embedding",
+                pdf_context_mode="model", pdf_image_ocr=False,
+                ingestion_directory=str(Path(directory) / "jobs"),
+                chroma_directory=str(Path(directory) / "chroma"),
+                pdf_directory=str(Path(directory) / "documents"))
+            manager = IngestionManager(settings)
+            try:
+                with patch("app.pdf.context.create_client", side_effect=AssertionError("offline network call")) as client:
+                    with patch.object(manager, "start"):
+                        job = manager.submit_batch([("report.pdf", native_fixture())], offline=True)[0]
+                    manager._process(job.id)
+                    self.assertEqual(manager.get(job.id).status, "completed")
+                    client.assert_not_called()
+                service = RAGService(DemoEmbedder(), settings=settings)
+                records = service.store.query(include_vectors=False).items
+                self.assertTrue(records)
+                self.assertEqual({record.metadata["pdf_context_mode"] for record in records}, {"rule"})
+                self.assertEqual(service.settings.api_key, "")
+                self.assertEqual(settings.api_key, "configured-key")
+            finally:
+                manager.stop()
+
     def test_native_source_and_rotation(self):
         parsed = parse_pdf("report.pdf", native_fixture(rotated=True))
         self.assertEqual(parsed.page_count, 1)
@@ -88,7 +136,12 @@ class PdfTests(unittest.TestCase):
         paragraph = next(item for item in parsed.elements if item.kind == "paragraph")
         paragraph.text = "A complete sentence. " * 80
         chunks = build_chunks(parsed, size=120)
-        self.assertEqual("".join(chunk.page_content for chunk in chunks), paragraph.text)
+        self.assertEqual("".join(chunk.metadata["_pdf_raw_content"] for chunk in chunks), paragraph.text)
+        self.assertEqual(" ".join(chunk.page_content for chunk in chunks), paragraph.text.strip())
+        for chunk in chunks:
+            for mapping in json.loads(chunk.metadata["pdf_serialized_map"]):
+                original = paragraph.text[mapping["source_char_start"]:mapping["source_char_end"]]
+                self.assertEqual(chunk.page_content[mapping["start"]:mapping["end"]], original.strip())
         self.assertTrue(all(chunk.metadata["page_start"] == 1 for chunk in chunks))
 
     def test_real_offline_ingestion_and_duplicate(self):

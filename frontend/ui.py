@@ -64,6 +64,13 @@ backend_config = (
     settings.chroma_collection,
     settings.chunk_size,
     settings.chunk_overlap,
+    settings.chat_model,
+    settings.pdf_directory,
+    settings.pdf_target_size,
+    settings.pdf_context_mode,
+    settings.pdf_image_ocr,
+    settings.pdf_ocr_language,
+    settings.pdf_ocr_dpi,
 )
 # 切换模型时连接对应集合，原有集合的数据继续保留。
 if st.session_state.get("backend_config") != backend_config:
@@ -116,7 +123,7 @@ if page == "导入任务":
     )
     st.stop()
 
-if not settings.api_key:
+if backend == "离线演示（字符匹配）":
     st.info("当前为演示模式，知识库问题展示检索原文；问候和助手介绍可直接回答。")
 for message in history.messages():
     render_message(message["role"], message["content"], message.get("hits", []))
@@ -142,7 +149,7 @@ if question := st.chat_input("围绕已导入文档提问"):
                         )
                         debug_step("追问内容", lambda: {"最近问题": history.recent_questions(), "新检索问题": retrieval_question})
                     hits = rag.search(retrieval_question, top_k)
-                client = create_client(settings) if hits and settings.api_key else None
+                client = create_client(settings) if hits and rag.settings.api_key else None
                 with st.spinner("正在生成回答…"):
                     reply = answer(question, hits, history, client, settings.chat_model)
             else:

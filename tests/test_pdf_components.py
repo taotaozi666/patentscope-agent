@@ -39,4 +39,7 @@ class PdfComponentsTests(unittest.TestCase):
                 page.selectbox[0].select(index).run()
                 self.assertEqual(len(page.exception), 0)
                 self.assertIn("320,000.00", page.text[0].value)
-                self.assertEqual(len(page.image), 1)
+                captions = [image.caption for item in page.image for image in item.proto.imgs]
+                self.assertEqual(len(captions), 2)
+                self.assertTrue(any("区域裁图" in caption for caption in captions))
+                self.assertIn("红框标出片段或所选单元格的原始来源区域。", captions)

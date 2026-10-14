@@ -13,6 +13,28 @@ from app.schemas import Hit, Settings
 
 
 class HistoryTests(unittest.TestCase):
+    def test_offline_ui_with_configured_key_never_calls_answer_model(self):
+        with TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+            settings = Settings("test-key", "chat", "embedding", chroma_directory=directory)
+            with patch("app.config.get_settings", return_value=settings):
+                app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "frontend/ui.py")).run()
+                app.sidebar.selectbox[0].set_value("离线演示（字符匹配）").run()
+                self.assertFalse(app.exception)
+                app.session_state["rag"].add_document("fruit.txt", "苹果是一种水果。")
+                with patch("app.models.create_client") as client:
+                    app.chat_input[0].set_value("苹果是什么？").run()
+                    self.assertFalse(app.exception)
+                    client.assert_not_called()
+                reply = app.session_state["chat_history"].messages()[-1]
+                self.assertIn("演示模式", reply["content"])
+                self.assertTrue(reply["hits"])
+                self.assertTrue(app.info)
+
+    def test_explicit_patent_switch_does_not_reuse_previous_number(self):
+        history = ChatHistory()
+        history.add_turn("介绍 CN123456789A", "简介")
+        self.assertEqual(history.retrieval_question("CN987654321A"), "CN987654321A")
+
     def test_ui_missing_knowledge_does_not_open_general_chat(self):
         with TemporaryDirectory(ignore_cleanup_errors=True) as directory:
             settings = Settings("test-key", "chat", "embedding", chroma_directory=directory)
@@ -24,7 +46,7 @@ class HistoryTests(unittest.TestCase):
                 ) as factory:
                     app.chat_input[0].set_value("大熊在干嘛").run()
                     self.assertFalse(app.exception)
-                    search.assert_called_once_with("大熊在干嘛", 3)
+                    search.assert_called_once_with("大熊在干嘛", 8)
                     factory.assert_not_called()
                 self.assertIn("没有找到", app.session_state["chat_history"].messages()[-1]["content"])
 
@@ -48,7 +70,7 @@ class HistoryTests(unittest.TestCase):
                         question = "请解释文档中的第一人称我到底是谁"
                         app.chat_input[0].set_value(question).run()
                         self.assertFalse(app.exception)
-                        search.assert_called_once_with(question, 3)
+                        search.assert_called_once_with(question, 8)
                         factory.assert_called_once_with(settings)
                         client.chat.completions.create.assert_called_once()
                         client.close.assert_called_once()
@@ -92,7 +114,7 @@ class HistoryTests(unittest.TestCase):
                     question = "你好，请介绍文档中的苹果"
                     app.chat_input[0].set_value(question).run()
                     self.assertFalse(app.exception)
-                    search.assert_called_once_with(question, 3)
+                    search.assert_called_once_with(question, 8)
                 self.assertTrue(app.session_state["chat_history"].messages()[-1]["hits"])
 
     def test_direct_turns_remain_in_chat_but_are_excluded_from_retrieval_history(self):
@@ -121,7 +143,7 @@ class HistoryTests(unittest.TestCase):
                 with patch.object(rag, "search", wraps=rag.search) as search:
                     app.chat_input[0].set_value("它有什么特点？").run()
                 self.assertFalse(app.exception)
-                search.assert_called_once_with("苹果是什么？\n它有什么特点？", 3)
+                search.assert_called_once_with("苹果是什么？\n它有什么特点？", 8)
 
     def test_turn_snapshot_clear_and_isolation(self):
         history = ChatHistory()

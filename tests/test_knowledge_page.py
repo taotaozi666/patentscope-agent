@@ -1,7 +1,6 @@
 """验证知识库两级导航、文档隔离、分页和完整原文展示。"""
 
 import unittest
-from html import escape
 from unittest.mock import patch
 
 from langchain_core.documents import Document
@@ -38,17 +37,18 @@ class KnowledgePageTests(unittest.TestCase):
         self.assertFalse(app.get("html"))
         app.button(key=f"knowledge_open_{self.document.id}").click().run()
         self.assertFalse(app.exception)
-        table = app.get("html")[0].proto.body
-        self.assertIn(escape(self.text), table)
-        self.assertNotIn("<script>", table)
-        self.assertNotIn("另一份文档内容", table)
-        self.assertLess(table.index("<th>文本</th>"), table.index("<th>片段编号</th>"))
+        # 原文现在由 st.text 展示，HTML 标签应作为纯文本完整保留。
+        texts = [item.value for item in app.text]
+        self.assertIn(self.text, texts)
+        self.assertNotIn("另一份文档内容", texts)
+        self.assertFalse(app.get("html"))
+        self.assertTrue(any("片段 1 ·" in item.value for item in app.caption))
         app.number_input(key="knowledge_page_number").set_value(2).run()
-        self.assertIn("正文 23", app.get("html")[0].proto.body)
+        self.assertIn("正文 23", [item.value for item in app.text])
         app.text_input(key="knowledge_chunk_keyword").set_value("末尾必须保留").run()
         self.assertFalse(app.exception)
         self.assertEqual(app.number_input(key="knowledge_page_number").value, 1)
-        self.assertIn(escape(self.text), app.get("html")[0].proto.body)
+        self.assertIn(self.text, [item.value for item in app.text])
         app.button[0].click().run()
         self.assertFalse(app.exception)
         self.assertEqual(len(app.button), 2)
@@ -92,7 +92,7 @@ class KnowledgePageTests(unittest.TestCase):
         app.run()
         self.assertFalse(app.exception)
         self.assertEqual(app.number_input(key="knowledge_page_number").value, 1)
-        self.assertIn(escape(self.text), app.get("html")[0].proto.body)
+        self.assertIn(self.text, [item.value for item in app.text])
 
 
 if __name__ == "__main__":

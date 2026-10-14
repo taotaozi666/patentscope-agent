@@ -10,7 +10,7 @@ import pymupdf
 from app.schemas.pdf import NativeImageInfo, NativeTextPage, ParsedPdf, PdfElement, SourceSpan
 from .patent import PATENT_VERSION, extract_patent
 
-PARSER_VERSION = f"native-v4:{PATENT_VERSION}:pymupdf-{pymupdf.VersionBind}"
+PARSER_VERSION = f"native-v5:{PATENT_VERSION}:pymupdf-{pymupdf.VersionBind}"
 
 
 def _span(
@@ -224,6 +224,8 @@ def parse_pdf(source: str, content: bytes, *, ocr_images: bool = True,
             image_status = ["not_needed" if text else "disabled" if not ocr_images else "no_text"
                             for text in image_texts]
             if images and ocr_images and any(not text for text in image_texts):
+                # 资格取决于原生文字；收到第一个 OCR 块后仍需接收该图的后续块。
+                ocr_targets = {index for index, text in enumerate(image_native_text) if not text}
                 try:
                     recognized = _ocr_blocks(page, ocr_language, ocr_dpi, full=False)
                     for bbox, text in recognized:
@@ -233,7 +235,7 @@ def parse_pdf(source: str, content: bytes, *, ocr_images: bool = True,
                             overlap = text_rect & pymupdf.Rect(image["bbox"])
                             if not overlap.is_empty:
                                 matches.append((overlap.get_area(), image_index))
-                        matches = [match for match in matches if not image_texts[match[1]]]
+                        matches = [match for match in matches if match[1] in ocr_targets]
                         if matches:
                             _, image_index = max(matches)
                             image_texts[image_index] = (image_texts[image_index] + "\n" + text).strip()
