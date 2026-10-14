@@ -9,9 +9,10 @@ from hashlib import sha256
 from langchain_core.documents import Document
 
 from app.schemas.pdf import ParsedPdf, SemanticObject
+from .normalization import PDF_TEXT_NORMALIZATION_VERSION, normalize_pdf_text
 from .objects import build_objects
 
-CHUNKER_VERSION = "semantic-chunks-v2"
+CHUNKER_VERSION = "semantic-chunks-v7"
 
 
 def build_chunks(parsed: ParsedPdf, size: int = 600, target: int = 0) -> list[Document]:
@@ -25,15 +26,26 @@ def build_chunks(parsed: ParsedPdf, size: int = 600, target: int = 0) -> list[Do
     child_counts: dict[str, int] = defaultdict(int)
 
     def emit(parent: SemanticObject, text: str, mappings: list[dict], extra: dict | None = None) -> None:
+        raw_text = text
+        if parent.kind != "table":
+            text, mappings = normalize_pdf_text(text, mappings)
         index = child_counts[parent.id]
         child_counts[parent.id] += 1
         context = f"文档：{parsed.title[:100]}；语义对象：{parent.title[:160]}。"
+        if parsed.patent:
+            if parsed.patent.publication_number:
+                context += f"专利公开号：{parsed.patent.publication_number.value}。"
+            if parsed.patent.title:
+                context += f"专利发明名称：{parsed.patent.title.value[:160]}。"
         if parent.kind == "claim" and parent.payload["depends_on"]:
             context += "本项引用权利要求 " + "、".join(map(str, parent.payload["depends_on"])) + "，解释时需要对应基础条件。"
         if parent.kind == "table":
             context += "；".join([*parent.payload.get("units", []), *parent.payload.get("notes", [])])[:300]
         if parent.kind == "figure":
-            context += "图形内容尚未理解；以下是图号、图注和说明书中的相关原文。"
+            if parent.payload.get("ocr_status") == "recognized":
+                context += "图内 OCR 文字已提取；图形关系和视觉语义仍需结合原图核对。"
+            else:
+                context += "图形内容尚未理解；以下是图号、图注和说明书中的相关原文。"
         spans = list({(item["span"]["page_no"], item["span"]["element_id"]): item["span"] for item in mappings if item.get("span")}.values())
         if parent.kind == "figure":
             spans = list({(span.page_no, span.element_id): asdict(span) for span in parent.spans}.values())
@@ -42,6 +54,16 @@ def build_chunks(parsed: ParsedPdf, size: int = 600, target: int = 0) -> list[Do
         identifier = sha256(f"{run_id}:{CHUNKER_VERSION}:{size}:{target}:{parent.id}:{index}:{text}".encode()).hexdigest()
         pages = [span["page_no"] for span in spans]
         section_path = parent.payload.get("section_path", parent.title)
+        doc_type = str(parent.payload.get("doc_type_kwd") or ("image" if parent.kind == "figure" else "table" if parent.kind == "table" else "text"))
+        layout_type = str(parent.payload.get("layout_type") or doc_type)
+        text_origin = "ocr" if any(item.get("role") == "ocr" for item in mappings) else str(parent.payload.get("text_origin", "native"))
+        element_attributes = {
+            "doc_type_kwd": doc_type, "ck_type": doc_type, "layout_type": layout_type,
+            "chunk_type": parent.kind, "section_path": section_path, "text_origin": text_origin,
+            "page_start": min(pages), "page_end": max(pages),
+            "source_spans": spans,
+            **parent.payload.get("properties", {}),
+        }
         metadata = {
             "source": parsed.source, "format": ".pdf", "chunk": len(output)+1,
             "document_id": parent.document_id, "document_title": parsed.title,
@@ -53,6 +75,11 @@ def build_chunks(parsed: ParsedPdf, size: int = 600, target: int = 0) -> list[Do
             "page_start": min(pages), "page_end": max(pages),
             "pdf_version_id": parsed.content_hash, "pdf_parse_id": run_id, "pdf_chunk_id": identifier,
             "pdf_prechunked": True, "chunk_type": parent.kind,
+            "doc_type_kwd": doc_type, "ck_type": doc_type, "layout_type": layout_type,
+            "text_origin": text_origin,
+            "attributes_json": json.dumps(element_attributes, ensure_ascii=False),
+            "image_id": str(parent.payload.get("image_id") or ""),
+            "ocr_status": str(parent.payload.get("ocr_status") or "not_applicable"),
             "pdf_source_spans": json.dumps(spans, ensure_ascii=False),
             "pdf_serialized_map": json.dumps(mappings, ensure_ascii=False),
             "pdf_context": context, "context_text": context, "context_method": "rule",
@@ -60,6 +87,8 @@ def build_chunks(parsed: ParsedPdf, size: int = 600, target: int = 0) -> list[Do
             "context_is_evidence": False,
             "context_source_spans": json.dumps(parent.payload.get("related_spans", []), ensure_ascii=False),
             "pdf_chunk_size": size, "pdf_target_size": target, "_pdf_index_text": context + "\n" + text,
+            "_pdf_raw_content": raw_text,
+            "text_normalization_version": PDF_TEXT_NORMALIZATION_VERSION,
         }
         for name in ("table_id", "claim_number", "patent_section", "figure_number", "visual_status"):
             if name in parent.payload:
@@ -83,8 +112,11 @@ def build_chunks(parsed: ParsedPdf, size: int = 600, target: int = 0) -> list[Do
                     if right <= left:
                         continue
                     offset = original.get("source_char_start", 0) + left - original["start"]
-                    mappings.append({**original, "start": left-start, "end": right-start,
-                                     "source_char_start": offset, "source_char_end": offset + right-left})
+                    mapping = {**original, "start": left-start, "end": right-start}
+                    if "source_char_start" in original:
+                        mapping["source_char_start"] = offset
+                        mapping["source_char_end"] = offset + right-left
+                    mappings.append(mapping)
                 emit(parent, parent.raw_content[start:end], mappings)
             continue
         rows = parent.payload["rows"]

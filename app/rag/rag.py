@@ -3,6 +3,7 @@
 from collections.abc import Callable, Sequence
 from hashlib import sha256
 from pathlib import Path
+import re
 
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
@@ -14,9 +15,14 @@ from app.rag.embeddings import DemoEmbedder, SemanticEmbedder, create_embeddings
 from app.history import ChatHistory, as_history
 from app.models import generate_reply
 from app import prompt
-from app.schemas import ChatMessage, Hit, Settings
+from app.schemas import ChatMessage, ChunkRecord, Hit, Settings
 from app.storage import KnowledgeStore, create_store
 from app.trace import debug_step, print_step, trace_operation
+
+
+_PATENT_OVERVIEW = re.compile(r"专利|发明名称|申请公布号|申请人|发明人|技术内容|技术方案|专利简介|专利介绍")
+_PUBLICATION_NUMBER = re.compile(r"CN\s*\d{6,12}\s*[A-CUSY](?:\d)?", re.IGNORECASE)
+_PATENT_OVERVIEW_QUERY = "专利著录信息 发明名称 摘要 技术领域 发明内容 技术方案 申请人 发明人 申请日 申请公布日 国际分类号"
 
 
 class RAGService:
@@ -51,13 +57,11 @@ class RAGService:
         with trace_operation("文档导入", 来源=source):
             self.last_import_message = None
             is_pdf = Path(source).suffix.lower() == ".pdf"
+            loader = loaders.create(source, content, self.settings)
+            documents = loader.load()
             if is_pdf:
-                from app.pdf.service import prepare_pdf
-
-                documents, message = prepare_pdf(source, content, self.settings)
+                message = getattr(loader, "import_message", None)
                 self.last_import_message = message or None
-            else:
-                documents = loaders.load(source, content)
             content_hash = sha256(content).hexdigest()
             pipeline_fingerprint = self._pipeline_fingerprint(
                 content_hash, Path(source).suffix.lower()
@@ -100,12 +104,10 @@ class RAGService:
     ) -> int:
         if on_progress:
             on_progress("splitting", 0, 0)
-        chunks = split_documents(
-            documents, self.settings.chunk_size, self.settings.chunk_overlap
-        )
+        chunks = split_documents(documents, self.settings.chunk_size, self.settings.chunk_overlap)
         print_step(
             "文档切分完成",
-            分割器="PDF 结构分块" if any(doc.metadata.get("pdf_prechunked") for doc in documents) else "RecursiveCharacterTextSplitter",
+            分割器="General",
             片段数量=len(chunks),
         )
         debug_step("文档切分预览", lambda: {
@@ -177,6 +179,7 @@ class RAGService:
             on_progress("indexing", len(chunks), len(chunks))
         for document in chunks:
             document.metadata.pop("_pdf_index_text", None)
+            document.metadata.pop("_pdf_raw_content", None)
         count = self.store.add_documents(chunks, vectors)
         if on_progress:
             on_progress("completed", count, count)
@@ -196,17 +199,18 @@ class RAGService:
 
             from app.prompt.prompt import PDF_CONTEXT_VERSION
 
-            return sha256(f"{content_hash}:{PARSER_VERSION}:{CHUNKER_VERSION}:{self.settings.chunk_size}:"
+            return sha256(f"{content_hash}:{PARSER_VERSION}:{CHUNKER_VERSION}:general:{self.settings.chunk_size}:"
                           f"{self.settings.pdf_target_size}:{self.settings.pdf_context_mode}:{PDF_CONTEXT_VERSION}:"
+                          f"{self.settings.pdf_image_ocr}:{self.settings.pdf_ocr_language}:{self.settings.pdf_ocr_dpi}:"
                           f"{self.settings.chat_model if self.settings.pdf_context_mode == 'model' else ''}".encode()).hexdigest()
         strategy = (
-            f"{content_hash}:{file_format}:recursive-heading-v1:"
+            f"{content_hash}:{file_format}:general:heading-split-v2:"
             f"{self.settings.chunk_size}:{self.settings.chunk_overlap}"
         )
         return sha256(strategy.encode("utf-8")).hexdigest()
 
     def search(self, question: str, top_k: int = 3) -> list[Hit]:
-        """按余弦相似度返回最相关的若干片段。"""
+        """向量召回；专利介绍类问题额外召回著录信息与摘要候选。"""
         count = self.store.count()
         if not count or not question.strip() or top_k <= 0:
             print_step("跳过检索", 原因="知识库为空、问题为空或 Top K 无效")
@@ -218,20 +222,40 @@ class RAGService:
             top_k=top_k,
             知识库片段数=count,
         )
-        query = self.embedder.embed_query(question)
-        print_step(
-            "问题向量生成完成",
-            向量长度=len(query),
-        )
-        debug_step("问题向量预览", lambda: {"向量预览": query[:8]})
-        hits = [
-            Hit(record.source, record.text, score, record.chunk)
-            for record, score in self.store.nearest(query, top_k)
-        ]
+        overview_query = bool(_PATENT_OVERVIEW.search(question))
+        publication_match = _PUBLICATION_NUMBER.search(question)
+        queries = [question]
+        if overview_query:
+            number = publication_match.group(0) if publication_match else ""
+            queries.append(f"{number} {_PATENT_OVERVIEW_QUERY}".strip())
+        candidate_limit = min(count, top_k * (3 if overview_query else 1))
+        candidates: dict[str, tuple[ChunkRecord, float]] = {}
+        for query_text in queries:
+            query = self.embedder.embed_query(query_text)
+            for record, score in self.store.nearest(query, candidate_limit):
+                key = record.id
+                previous = candidates.get(key)
+                if previous is None or score > previous[1]:
+                    candidates[key] = (record, score)
+        print_step("问题向量生成完成", 查询向量数=len(queries))
+        if overview_query:
+            def patent_priority(item: tuple[ChunkRecord, float]) -> tuple[float, float]:
+                record, score = item
+                metadata = record.metadata
+                section = str(metadata.get("patent_section", "")).lower()
+                boost = {"cover": .10, "abstract": .08, "claims": .025}.get(section, 0.0)
+                if publication_match and str(metadata.get("publication_number", "")).casefold().replace(" ", "") == publication_match.group(0).casefold().replace(" ", ""):
+                    boost += .12
+                return (score + boost, score)
+            ranked = sorted(candidates.values(), key=patent_priority, reverse=True)
+        else:
+            ranked = sorted(candidates.values(), key=lambda item: item[1], reverse=True)
+        hits = [Hit(record.source, record.text, score, record.chunk, dict(record.metadata))
+                for record, score in ranked[:top_k]]
         print_step(
             "检索结果",
             结果数量=len(hits),
-            排序依据="向量相似度，没有独立重排",
+            排序依据="向量相似度；专利介绍问题优先著录信息、摘要和匹配公开号",
         )
         debug_step("检索原文", lambda: {
             "片段": [

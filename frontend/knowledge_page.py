@@ -2,7 +2,6 @@
 
 import math
 from datetime import datetime
-from html import escape
 from zoneinfo import ZoneInfo
 
 import streamlit as st
@@ -56,47 +55,52 @@ def _render_documents(documents: list[DocumentRecord]) -> None:
 
 
 def _render_chunk_table(records: list[ChunkRecord]) -> None:
-    """普通 HTML 表格让每行随原文增高，保留换行且不截断文本。"""
-    columns = ["文本", "片段编号", "字符数", "章节路径", "PDF 页码", "向量长度", "片段 ID", "导入时间"]
-    rows = []
+    """按切片类型展示正文，并为图像切片内联显示 PDF 来源裁图。"""
+    repository = None
     for record in records:
-        values = [
-            record.text,
-            record.chunk,
-            len(record.text),
-            record.metadata.get("heading_path", ""),
-            f"{record.metadata['page_start']}–{record.metadata['page_end']}" if "page_start" in record.metadata else "",
-            record.metadata.get("vector_dimensions", "未记录"),
-            record.id,
-            _local_time(record.created_at),
-        ]
-        rows.append(
-            "<tr>"
-            + "".join(f"<td>{escape(str(value))}</td>" for value in values)
-            + "</tr>"
-        )
-    st.html(
-        """
-        <style>
-        .knowledge-chunks { overflow-x: auto; }
-        .knowledge-chunks table { width: 100%; border-collapse: collapse; }
-        .knowledge-chunks th, .knowledge-chunks td {
-            border: 1px solid #8885; padding: 0.75rem; text-align: left;
-            vertical-align: top; white-space: pre-wrap; overflow-wrap: anywhere;
-            min-width: 5rem;
-        }
-        .knowledge-chunks th { background: #8881; }
-        .knowledge-chunks th:first-child, .knowledge-chunks td:first-child {
-            width: 60%; min-width: 22rem;
-        }
-        </style>
-        <div class="knowledge-chunks"><table><thead><tr>
-        """
-        + "".join(f"<th>{column}</th>" for column in columns)
-        + "</tr></thead><tbody>"
-        + "".join(rows)
-        + "</tbody></table></div>"
-    )
+        metadata = record.metadata
+        chunk_type = str(metadata.get("doc_type_kwd") or metadata.get("ck_type") or "text").lower()
+        type_label = {"image": "图片", "table": "表格", "text": "文本"}.get(chunk_type, chunk_type)
+        is_ocr = str(metadata.get("text_origin", "")).lower() == "ocr"
+
+        with st.container(border=True):
+            # Keep type and OCR provenance visible before the chunk content.
+            st.markdown(f"**{type_label}**" + ("　`OCR`" if is_ocr else ""))
+            if chunk_type == "image":
+                image_id = metadata.get("image_id")
+                image = None
+                if image_id:
+                    if repository is None:
+                        from app.config import get_settings
+                        from app.storage.pdf_repository import PdfRepository
+
+                        repository = PdfRepository(get_settings().pdf_directory)
+                    try:
+                        image = repository.get_region_image(str(image_id))
+                    except (OSError, ValueError):
+                        image = None
+                image_column, text_column = st.columns([1, 2], gap="medium")
+                with image_column:
+                    if image:
+                        st.image(image, caption="PDF 图片区域", width=180)
+                    else:
+                        st.caption("图片裁图暂不可用")
+                with text_column:
+                    st.caption("OCR 识别文本" if is_ocr else "切片文本")
+                    st.text(record.text or "（无可显示文本）")
+            else:
+                st.text(record.text)
+
+            page_range = (
+                f"第 {metadata['page_start']}–{metadata['page_end']} 页"
+                if "page_start" in metadata else ""
+            )
+            section_path = metadata.get("heading_path") or metadata.get("section_path") or ""
+            st.caption(
+                f"片段 {record.chunk} · {len(record.text)} 字符 · {page_range} · "
+                f"章节：{section_path or '未记录'} · 向量：{metadata.get('vector_dimensions', '未记录')} · "
+                f"ID：{record.id} · 导入：{_local_time(record.created_at)}"
+            )
 
 
 def _render_document(store: KnowledgeStore, document: DocumentRecord) -> None:

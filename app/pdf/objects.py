@@ -7,7 +7,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from app.schemas.pdf import ParsedPdf, PdfElement, SemanticObject, SourceSpan
 
-OBJECT_VERSION = "semantic-objects-v1"
+OBJECT_VERSION = "semantic-objects-v2"
 
 
 def build_objects(parsed: ParsedPdf) -> list[SemanticObject]:
@@ -17,6 +17,7 @@ def build_objects(parsed: ParsedPdf) -> list[SemanticObject]:
     result: list[SemanticObject] = []
     by_id = {element.id: element for element in parsed.elements}
     consumed: set[str] = set()
+    consumed_images: set[str] = set()
 
     def add(kind: str, title: str, text: str, spans: list[SourceSpan], mappings: list[dict], payload: dict) -> None:
         identifier = sha256(f"{run}:{OBJECT_VERSION}:{kind}:{len(result)}:{text}".encode()).hexdigest()
@@ -41,6 +42,7 @@ def build_objects(parsed: ParsedPdf) -> list[SemanticObject]:
                 and (match := re.match(r"^\s*图\s*(\d+(?:[a-zA-Z])?)(?![0-9a-zA-Z])", element.text))]
     for caption, number in captions:
         candidates = [element for element in parsed.elements if element.kind == "image"
+                      and element.id not in consumed_images
                       and element.span.page_no == caption.span.page_no
                       and element.span.bbox[2] - element.span.bbox[0] > .12
                       and element.span.bbox[3] - element.span.bbox[1] > .08
@@ -60,16 +62,42 @@ def build_objects(parsed: ParsedPdf) -> list[SemanticObject]:
                                           (.08, top, .94, caption.span.bbox[1]), f"figure_region_{caption.id}"))
         descriptions = [element for element in parsed.elements if element.payload.get("patent_section") == "drawing_description"
                         and number in re.findall(r"图\s*(\d+(?:[a-zA-Z])?)", element.text)]
-        evidence = [caption, *descriptions]
+        image = candidates[0] if candidates else None
+        evidence = ([image] if image and image.text.strip() else []) + [caption, *descriptions]
         text, mappings = _join(evidence)
         spans.extend(element.span for element in descriptions)
         add("figure", f"图{number}", text, spans, mappings,
             {"figure_number": number, "image_element_ids": [element.id for element in candidates[:1]],
+             "image_id": image.payload.get("image_id") if image else sha256(f"{parsed.content_hash}:figure:{caption.id}".encode()).hexdigest(),
              "caption_id": caption.id, "description_ids": [element.id for element in descriptions],
              "visual_status": "not_analyzed", "requires_review": len(candidates) != 1,
              "region_method": "image_caption" if candidates else "caption_candidate",
-             "section_path": caption.section_path})
+             "section_path": caption.section_path, "doc_type_kwd": "image", "layout_type": "figure",
+             "ocr_text": image.payload.get("ocr_text", "") if image else "",
+             "ocr_status": image.payload.get("ocr_status", "not_applicable") if image else "not_applicable",
+             "text_origin": image.payload.get("text_origin", "native") if image and image.text.strip() else "native",
+             "properties": {"figure_number": number, "caption": caption.text,
+                            "image_id": image.payload.get("image_id") if image else sha256(f"{parsed.content_hash}:figure:{caption.id}".encode()).hexdigest(),
+                            "has_ocr_text": bool(image and image.payload.get("text_origin") == "ocr" and image.text.strip()),
+                            "has_embedded_text": bool(image and image.text.strip())}})
+        if image:
+            consumed_images.add(image.id)
         consumed.add(caption.id)
+
+    # OCR text inside an uncaptioned image remains retrievable as an image-typed object.
+    for image in parsed.elements:
+        if image.kind != "image" or image.id in consumed_images or not image.text.strip():
+            continue
+        text, mappings = _join([image])
+        add("figure", f"图片区域 / 第 {image.span.page_no} 页", text, [image.span], mappings,
+            {"image_element_ids": [image.id], "image_id": image.payload.get("image_id"),
+             "section_path": image.section_path, "doc_type_kwd": "image", "layout_type": "image",
+             "ocr_text": image.payload.get("ocr_text", ""),
+             "ocr_status": image.payload.get("ocr_status", "unknown"),
+             "text_origin": image.payload.get("text_origin", "none"),
+             "properties": {**image.payload.get("properties", {}),
+                            "has_ocr_text": image.payload.get("text_origin") == "ocr",
+                            "has_embedded_text": bool(image.text.strip())}})
 
     pending: list[PdfElement] = []
 
@@ -77,7 +105,8 @@ def build_objects(parsed: ParsedPdf) -> list[SemanticObject]:
         if pending:
             text, mappings = _join(pending)
             add("text", pending[0].section_path or "未确定章节", text, [element.span for element in pending], mappings,
-                {"patent_section": pending[0].payload.get("patent_section", ""), "element_ids": [element.id for element in pending]})
+                {"patent_section": pending[0].payload.get("patent_section", ""), "element_ids": [element.id for element in pending],
+                 "doc_type_kwd": "text", "layout_type": "text", "properties": {"section_path": pending[0].section_path}})
             pending.clear()
 
     for index, element in enumerate(parsed.elements):
@@ -100,6 +129,7 @@ def build_objects(parsed: ParsedPdf) -> list[SemanticObject]:
             raw_table = "\n".join(" | ".join(value or "" for value in row) for row in element.payload["rows"])
             add("table", titles[0].text if titles else element.section_path or "表格", raw_table, [element.span], [],
                 {**element.payload, "table_id": element.id, "section_path": element.section_path,
+                 "doc_type_kwd": "table", "layout_type": "table",
                  "caption": titles[0].text if titles else "", "units": [item.text for item in units],
                  "notes": [item.text for item in notes], "related_spans": [asdict(item.span) for item in [*titles, *units, *notes]],
                  "header_status": "candidate_first_row"})
@@ -125,6 +155,10 @@ def _join(elements: list[PdfElement]) -> tuple[str, list[dict]]:
             text += "\n\n"
         start = len(text)
         text += element.text
-        mappings.append({"start": start, "end": len(text), "element_id": element.id,
-                         "source_char_start": 0, "source_char_end": len(element.text), "span": asdict(element.span), "role": "source"})
+        is_ocr = element.payload.get("text_origin") == "ocr"
+        mapping = {"start": start, "end": len(text), "element_id": element.id,
+                   "span": asdict(element.span), "role": "ocr" if is_ocr else "source"}
+        if not is_ocr:
+            mapping.update(source_char_start=0, source_char_end=len(element.text))
+        mappings.append(mapping)
     return text, mappings

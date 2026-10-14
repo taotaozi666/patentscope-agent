@@ -48,10 +48,15 @@ def get_settings(
     chunk_overlap = int(config.get("CHUNK_OVERLAP", "100"))
     pdf_target_size = int(config.get("PDF_TARGET_SIZE", "0"))
     pdf_context_mode = config.get("PDF_CONTEXT_MODE", "rule").lower()
+    pdf_image_ocr = config.get("PDF_IMAGE_OCR", "true").lower() in {"1", "true", "yes", "on"}
+    pdf_ocr_language = config.get("PDF_OCR_LANGUAGE", "chi_sim+eng")
+    pdf_ocr_dpi = int(config.get("PDF_OCR_DPI", "200"))
     if not 0 <= pdf_target_size <= chunk_size:
         raise ValueError("PDF_TARGET_SIZE 必须介于 0 和 CHUNK_SIZE 之间，0 表示自动使用上限的 80%")
     if pdf_context_mode not in {"rule", "model"}:
         raise ValueError("PDF_CONTEXT_MODE 必须为 rule 或 model")
+    if not 72 <= pdf_ocr_dpi <= 600:
+        raise ValueError("PDF_OCR_DPI 必须介于 72 和 600 之间")
     if not 0 <= chunk_overlap < chunk_size:
         raise ValueError("CHUNK_OVERLAP 必须非负且小于 CHUNK_SIZE")
     max_files = int(config.get("INGESTION_MAX_FILES", "20"))
@@ -78,6 +83,9 @@ def get_settings(
         pdf_directory=str(pdf_directory.resolve()),
         pdf_target_size=pdf_target_size,
         pdf_context_mode=pdf_context_mode,
+        pdf_image_ocr=pdf_image_ocr,
+        pdf_ocr_language=pdf_ocr_language,
+        pdf_ocr_dpi=pdf_ocr_dpi,
         chat_model=config.first("CHAT_MODEL", "MODEL", default="qwen3.8-max"),
         embedding_model=config.get("EMBEDDING_MODEL", "qwen3.7-text-embedding"),
         embedding_concurrency=embedding_concurrency,

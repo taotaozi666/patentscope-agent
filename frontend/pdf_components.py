@@ -7,7 +7,7 @@ import streamlit as st
 from app.config import get_settings
 
 from app.storage.pdf_repository import PdfRepository
-from app.pdf.preview import render_source_page
+from app.pdf.preview import render_source_page, render_source_region
 
 
 def render_pdf_sources(metadata: dict) -> None:
@@ -24,6 +24,10 @@ def render_pdf_sources(metadata: dict) -> None:
             return
         data = saved["metadata"]
         st.caption(f"PDF 第 {data['page_start']}–{data['page_end']} 页 · {data['section_path'] or '未确定章节'}")
+        st.caption(f"内容类型：{data.get('doc_type_kwd', 'text')} · 布局类型：{data.get('layout_type', 'text')} · OCR：{data.get('ocr_status', 'not_applicable')}")
+        if data.get("attributes_json"):
+            with st.expander("内容属性"):
+                st.json(json.loads(data["attributes_json"]))
         run = repository.get_run(data["pdf_parse_id"])
         if run and run["warnings"]:
             st.warning("；".join(run["warnings"]))
@@ -35,6 +39,37 @@ def render_pdf_sources(metadata: dict) -> None:
         st.download_button("下载原 PDF", original, file_name=data["source"], mime="application/pdf", key=f"pdf_download_{chunk_id}")
         spans = json.loads(data["pdf_source_spans"])
         mappings = json.loads(data["pdf_serialized_map"])
+        if data.get("doc_type_kwd") in {"image", "table"}:
+            source_ids = []
+            if data.get("parent_id"):
+                parent = repository.get_object(data["parent_id"])
+                if parent:
+                    source_ids = parent.get("payload", {}).get("image_element_ids", [])
+                    if parent.get("payload", {}).get("table_id"):
+                        source_ids.append(parent["payload"]["table_id"])
+            if run and source_ids:
+                elements = {item["id"]: item for item in run["elements"]}
+                shown_region = False
+                for element_id in source_ids:
+                    element = elements.get(element_id)
+                    if element:
+                        try:
+                            saved_region = repository.get_region_image(str(data.get("image_id", "")))
+                            region = saved_region or render_source_region(original, element["span"])
+                            st.image(region, caption=f"{data['doc_type_kwd']} 区域裁图 · 第 {element['span']['page_no']} 页")
+                            shown_region = True
+                        except (ValueError, IndexError, KeyError, TypeError):
+                            st.caption("区域裁图暂不可用。")
+                if not shown_region and spans:
+                    try:
+                        st.image(render_source_region(original, spans[0]), caption=f"{data['doc_type_kwd']} 来源区域裁图")
+                    except (ValueError, IndexError, KeyError, TypeError):
+                        st.caption("区域裁图暂不可用。")
+            elif spans:
+                try:
+                    st.image(render_source_region(original, spans[0]), caption=f"{data['doc_type_kwd']} 来源区域裁图")
+                except (ValueError, IndexError, KeyError, TypeError):
+                    st.caption("区域裁图暂不可用。")
         candidates = [item for item in mappings if item.get("span") and item.get("cell_id") and item["end"] > item["start"]]
         if candidates:
             cell_index = st.selectbox(
@@ -52,6 +87,9 @@ def render_pdf_sources(metadata: dict) -> None:
         else:
             st.warning("该片段没有可用的来源页码。")
         st.text(saved["text"])
+        if saved.get("raw_content") and saved["raw_content"] != saved["text"]:
+            with st.expander("查看保留原排版的提取文本"):
+                st.text(saved["raw_content"])
         if data.get("parent_id"):
             parent = repository.get_object(data["parent_id"])
             if parent:

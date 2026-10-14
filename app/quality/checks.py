@@ -104,7 +104,7 @@ def check_pdf(parsed: ParsedPdf, chunks: list[Document], size: int = 600) -> Qua
         report.pages.append(PageQuality(page_no, text_chars, sum(element.kind == "paragraph" for element in elements),
                                         sum(element.kind == "table" for element in elements), image_count, chunk_count))
         if image_count:
-            issue("images", "本页包含未理解的图片区域；附图内容不属于已解析文字。", page_no)
+            issue("images", "本页包含图像区域；OCR 文字识别不等于理解了图表语义，请对照原图核验。", page_no)
         if text_chars < 50:
             issue("low_text", "本页提取文字不足 50 字符，可能是附图页、空页或漏提取，请对照原页。", page_no)
 

@@ -12,7 +12,8 @@ from .context import enhance_context
 
 
 def prepare_pdf(source: str, content: bytes, settings: Settings):
-    parsed = parse_pdf(source, content)
+    parsed = parse_pdf(source, content, ocr_images=settings.pdf_image_ocr,
+                       ocr_language=settings.pdf_ocr_language, ocr_dpi=settings.pdf_ocr_dpi)
     chunks = build_chunks(parsed, settings.chunk_size, settings.pdf_target_size)
     for chunk in chunks:
         chunk.metadata["pdf_context_mode"] = settings.pdf_context_mode

@@ -2,13 +2,20 @@
 
 from langchain_core.document_loaders import BaseLoader
 
+from app.config import get_settings
+from app.schemas import Settings
+
 
 class NativePdfLoader(BaseLoader):
-    def __init__(self, source: str, content: bytes) -> None:
+    """PDF Loader shares the full preparation, quality and persistence pipeline."""
+
+    def __init__(self, source: str, content: bytes, settings: Settings | None = None) -> None:
         self.source, self.content = source, content
+        self.settings = settings or get_settings()
+        self.import_message: str | None = None
 
     def lazy_load(self):
-        from .chunking import build_chunks
-        from .parser import parse_pdf
+        from .service import prepare_pdf
 
-        yield from build_chunks(parse_pdf(self.source, self.content))
+        documents, self.import_message = prepare_pdf(self.source, self.content, self.settings)
+        yield from documents

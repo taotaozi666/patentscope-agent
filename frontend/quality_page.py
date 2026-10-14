@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 
-from app.pdf.preview import render_source_page
+from app.pdf.preview import render_source_page, render_source_region
 from app.quality.service import inspect_saved_pdf
 from app.schemas import Settings
 from app.schemas.quality import ReviewDecision
@@ -144,6 +144,7 @@ def render_quality_page(settings: Settings) -> None:
     printed_labels = list(dict.fromkeys(item["payload"]["printed_page_label"] for item in elements if item.get("payload", {}).get("printed_page_label")))
     st.caption(f"物理第 {page_no} 页" + (" · 版面页码：" + "；".join(printed_labels) if printed_labels else ""))
     left, right = st.columns(2)
+    original: bytes | None = None
     with left:
         st.write("**原 PDF**")
         try:
@@ -157,7 +158,25 @@ def render_quality_page(settings: Settings) -> None:
             for item in elements:
                 with st.expander(f"{item['kind']} · {item['id']} · {item['section_path'] or '未确定章节'}",
                                  expanded=item["kind"] in {"paragraph", "heading"}):
-                    st.text(item["text"] or "图片区域：本版未提取其内容")
+                    payload = item.get("payload", {})
+                    origin = payload.get("text_origin", "native")
+                    origin_label = {"native": "原生文本", "ocr": "OCR 识别", "none": "无文字层"}.get(origin, origin)
+                    ocr_status = payload.get("ocr_status", "not_applicable")
+                    ocr_label = {"recognized": "已识别", "no_text": "未识别到文字", "disabled": "未启用",
+                                 "unavailable": "不可用", "not_needed": "无需 OCR", "not_applicable": "不适用"}.get(ocr_status, ocr_status)
+                    st.caption(f"类型：{payload.get('doc_type_kwd', 'text')} · 布局：{payload.get('layout_type', item['kind'])} · 文本来源：{origin_label} · OCR：{ocr_label}")
+                    if item["kind"] in {"image", "table"} and original is not None:
+                        try:
+                            st.image(render_source_region(original, item["span"]), caption=f"第 {page_no} 页 · {item['kind']} 区域裁图")
+                        except (ValueError, IndexError, KeyError, TypeError):
+                            st.caption("区域裁图暂不可用，可查看左侧原页高亮。")
+                    element_text = item["text"] or payload.get("ocr_text", "")
+                    st.text(element_text or ("图片区域：未提取到可显示文字" if item["kind"] == "image" else "（无文本）"))
+                    if payload.get("ocr_text") and payload["ocr_text"] != element_text:
+                        st.text_area("补充 OCR 文字", payload["ocr_text"], height=100, key=f"ocr_{run_id}_{item['id']}")
+                    if payload.get("properties"):
+                        with st.expander("元素属性"):
+                            st.json(payload["properties"])
                     label = f" · PDF 页码标签：{item['span']['page_label']}" if item['span']['page_label'] else ""
                     st.caption(f"物理第 {item['span']['page_no']} 页{label} · 区域：{item['span']['bbox']}")
                     if item["kind"] == "table":

@@ -51,7 +51,7 @@ with st.sidebar:
         ["离线演示（字符匹配）", "中文语义向量"],
         index=1 if settings.api_key else 0,
     )
-    top_k = st.slider("检索片段数", 1, 8, 3)
+    top_k = st.slider("检索片段数", 1, 12, 8)
     st.caption("语义检索和回答生成使用已配置的模型服务，相关资料和最近聊天会发送给该服务。")
     st.caption("同一检索模型的本地知识库由各会话共享；清空只作用于当前模型的集合。")
 

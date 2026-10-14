@@ -23,3 +23,6 @@ class Settings:
     pdf_directory: str = str(Path(__file__).resolve().parents[2] / ".documents")
     pdf_target_size: int = 0
     pdf_context_mode: str = "rule"
+    pdf_image_ocr: bool = True
+    pdf_ocr_language: str = "chi_sim+eng"
+    pdf_ocr_dpi: int = 200

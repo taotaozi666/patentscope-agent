@@ -5,13 +5,14 @@ from pathlib import Path
 
 from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents import Document
+from app.schemas import Settings
 from app.pdf.loader import NativePdfLoader
 
 
 class UTF8DocumentLoader(BaseLoader):
     """读取上传的 TXT/Markdown 字节，无需先保存临时文件。"""
 
-    def __init__(self, source: str, content: bytes) -> None:
+    def __init__(self, source: str, content: bytes, settings: Settings | None = None) -> None:
         self.source = source
         self.content = content
 
@@ -25,7 +26,7 @@ class UTF8DocumentLoader(BaseLoader):
         )
 
 
-LoaderFactory = Callable[[str, bytes], BaseLoader]
+LoaderFactory = Callable[[str, bytes, Settings | None], BaseLoader]
 
 
 class LoaderRegistry:
@@ -41,11 +42,14 @@ class LoaderRegistry:
     def extensions(self) -> list[str]:
         return [extension.lstrip(".") for extension in sorted(self._factories)]
 
-    def load(self, source: str, content: bytes) -> list[Document]:
+    def create(self, source: str, content: bytes, settings: Settings | None = None) -> BaseLoader:
         extension = Path(source).suffix.lower()
         if extension not in self._factories:
             raise ValueError(f"暂不支持 {extension or '无扩展名'} 文件")
-        return self._factories[extension](source, content).load()
+        return self._factories[extension](source, content, settings)
+
+    def load(self, source: str, content: bytes, settings: Settings | None = None) -> list[Document]:
+        return self.create(source, content, settings).load()
 
 
 loaders = LoaderRegistry()

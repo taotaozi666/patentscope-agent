@@ -6,6 +6,9 @@ from collections.abc import Iterator, Sequence
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+# Reserved for later; General is the only implemented chunking mode.
+RESERVED_STRATEGIES = ("recursive", "semantic", "structure", "parent_child")
+
 
 def _markdown_paragraphs(text: str) -> Iterator[tuple[list[tuple[int, str]], str]]:
     """提取正文段落与标题路径，围栏代码中的井号不作为标题。"""
@@ -39,11 +42,12 @@ def _markdown_paragraphs(text: str) -> Iterator[tuple[list[tuple[int, str]], str
                 lines = []
             if heading:
                 level = len(heading[1])
+                title = re.sub(r"^ {0,3}#{1,6}[ \t]*", "", line).strip()
                 # 同级标题替换，子标题保留父级标题，避免跨章节串联。
                 headings = [
                     (depth, title) for depth, title in headings if depth < level
                 ]
-                headings.append((level, line.strip()))
+                headings.append((level, title))
             continue
         lines.append(line)
 
@@ -78,7 +82,7 @@ def split_documents(
             heading_path = "\n".join(title for _, title in headings)
             section_path = "\n".join(title for level, title in headings if level > 1)
             document_title = next(
-                (title[1:].strip() for level, title in headings if level == 1), ""
+                (title for level, title in headings if level == 1), ""
             )
             prefix = section_path + "\n\n" if section_path else ""
             budget = size - len(prefix)

@@ -11,6 +11,7 @@ from uuid import uuid4
 from langchain_core.documents import Document
 
 from app.schemas.pdf import ParsedPdf
+from app.pdf.preview import render_source_region
 
 
 class PdfRepository:
@@ -33,19 +34,53 @@ class PdfRepository:
             temporary = path.with_suffix(f".{uuid4().hex}.tmp")
             temporary.write_bytes(content)
             temporary.replace(path)
+        self._save_region_images(parsed, content)
         run_id = str(chunks[0].metadata["pdf_parse_id"])
         with closing(sqlite3.connect(self.database, timeout=30)) as connection, connection:
             connection.execute("INSERT OR IGNORE INTO pdf_runs VALUES (?,?,?,?,?)",
                                (run_id, parsed.content_hash, parsed.source, json.dumps(asdict(parsed), ensure_ascii=False), "parsed"))
             connection.executemany("INSERT OR IGNORE INTO pdf_chunks VALUES (?,?,?)", [
-                (doc.metadata["pdf_chunk_id"], run_id, json.dumps({"text": doc.page_content, "raw_content": doc.page_content,
+                (doc.metadata["pdf_chunk_id"], run_id, json.dumps({"text": doc.page_content,
+                 "raw_content": doc.metadata.get("_pdf_raw_content", doc.page_content),
                  "context_text": doc.metadata.get("context_text", ""),
                  "index_text": doc.metadata.get("_pdf_index_text", doc.page_content),
-                 "metadata": {key: value for key, value in doc.metadata.items() if key != "_pdf_index_text"}}, ensure_ascii=False))
+                 "metadata": {key: value for key, value in doc.metadata.items()
+                              if key not in {"_pdf_index_text", "_pdf_raw_content"}}}, ensure_ascii=False))
                 for doc in chunks
             ])
             connection.executemany("INSERT OR IGNORE INTO pdf_objects VALUES (?,?,?)",
                                    [(item.id, run_id, json.dumps(asdict(item), ensure_ascii=False)) for item in parsed.objects])
+
+    def _save_region_images(self, parsed: ParsedPdf, content: bytes) -> None:
+        regions = self.directory / "regions"
+        regions.mkdir(parents=True, exist_ok=True)
+        targets = {}
+        for element in parsed.elements:
+            image_id = element.payload.get("image_id")
+            if image_id and element.kind in {"image", "table"}:
+                targets[str(image_id)] = asdict(element.span)
+        for item in parsed.objects:
+            image_id = item.payload.get("image_id")
+            if image_id and item.spans:
+                targets.setdefault(str(image_id), asdict(item.spans[0]))
+        for image_id, span in targets.items():
+            if not re.fullmatch(r"[a-f0-9]{64}", image_id):
+                continue
+            path = regions / f"{image_id}.png"
+            if path.exists():
+                continue
+            temporary = path.with_suffix(f".{uuid4().hex}.tmp")
+            try:
+                temporary.write_bytes(render_source_region(content, span))
+                temporary.replace(path)
+            finally:
+                temporary.unlink(missing_ok=True)
+
+    def get_region_image(self, image_id: str) -> bytes | None:
+        if not re.fullmatch(r"[a-f0-9]{64}", image_id):
+            return None
+        path = self.directory / "regions" / f"{image_id}.png"
+        return path.read_bytes() if path.is_file() else None
 
     def get_object(self, object_id: str) -> dict | None:
         with closing(sqlite3.connect(self.database, timeout=30)) as connection:

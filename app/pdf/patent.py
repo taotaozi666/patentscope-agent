@@ -6,7 +6,7 @@ from collections import defaultdict
 from app.schemas.patent import PatentClaim, PatentField, PatentSection, PatentStructure
 from app.schemas.pdf import ParsedPdf, PdfElement, SourceSpan
 
-PATENT_VERSION = "cn-patent-v2"
+PATENT_VERSION = "cn-patent-v3"
 SECTION_NAMES = {"abstract": "摘要", "claims": "权利要求", "description": "说明书",
                  "drawing_description": "附图说明", "drawings": "说明书附图", "cover": "著录信息"}
 SUBHEADINGS = {"技术领域", "背景技术", "发明内容", "实用新型内容", "附图说明", "具体实施方式"}
@@ -135,14 +135,16 @@ def extract_patent(parsed: ParsedPdf) -> PatentStructure | None:
             structure.sections.append(PatentSection(kind, SECTION_NAMES[kind], "\n\n".join(text for text, _ in parts),
                                                     _unique_spans([element for _, element in parts])))
     for number, parts in sorted(claim_parts.items()):
-        text = "\n\n".join(text for text, _ in parts)
+        # Elements within one legal claim are often split by PDF layout blocks;
+        # a single newline preserves clause boundaries without inventing blank paragraphs.
+        text = "\n".join(text for text, _ in parts)
         fragments = []
         start = 0
         for part, element in parts:
             offset = element.text.find(part)
             fragments.append({"start": start, "end": start + len(part), "element_id": element.id,
                               "source_char_start": max(0, offset), "source_char_end": max(0, offset) + len(part)})
-            start += len(part) + 2
+            start += len(part) + 1
         structure.claims.append(PatentClaim(number, text, _dependencies(text), _unique_spans([element for _, element in parts]), fragments))
     numbers = set(claim_parts)
     if not numbers:

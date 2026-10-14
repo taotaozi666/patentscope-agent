@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -47,9 +47,10 @@ class QueryResult:
 
 @dataclass
 class Hit:
-    """检索结果，包含来源、原文、相似度和片段编号。"""
+    """检索结果，包含来源、原文、相似度和可用于排序的来源元数据。"""
 
     source: str
     text: str
     score: float
     chunk: int
+    metadata: dict[str, Any] = field(default_factory=dict)
