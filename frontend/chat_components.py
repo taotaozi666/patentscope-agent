@@ -1,8 +1,7 @@
 """聊天消息与引用来源展示组件。"""
 
-import re
-
 import streamlit as st
+from frontend.image_components import render_image, render_image_text_sources
 
 from app.schemas import Hit
 
@@ -30,52 +29,48 @@ def render_message(role: str, content: str, hits: list[Hit] | None = None) -> No
     """消息容器只放正文，来源放在下方，避免影响头像与正文的对齐。"""
     with st.chat_message(role):
         st.markdown(content)
-        if role == "assistant":
-            render_cited_images(content, hits or [])
     if role == "assistant":
-        render_sources(hits or [])
+        render_sources(content, hits or [])
 
 
-def render_cited_images(content: str, hits: list[Hit]) -> None:
-    """在回答下方展示回答实际引用到的图片或表格区域。"""
-    cited_numbers = {int(value) for value in re.findall(r"\[(\d+)\]", content)}
-    cited_hits = [
-        (number, hit)
-        for number, hit in enumerate(hits, 1)
-        if number in cited_numbers and hit.metadata.get("image_id")
-    ]
-    if not cited_hits:
-        return
-
-    st.caption("引用图片")
-    columns = st.columns(min(3, len(cited_hits)))
-    for index, (number, hit) in enumerate(cited_hits):
-        image = _get_region_image(hit.metadata.get("image_id"))
-        with columns[index % len(columns)]:
-            if image:
-                st.image(image, caption=f"[{number}] {hit.source} · 片段 {hit.chunk}", width=220)
-            else:
-                st.caption(f"[{number}] 图片暂不可用 · {hit.source} · 片段 {hit.chunk}")
-
-
-def render_sources(hits: list[Hit]) -> None:
-    """展示当前回答引用的文档原文。"""
+def render_sources(content: str, hits: list[Hit]) -> None:
+    """在同一个折叠区展示全部检索候选，编号与回答引用一致。"""
     if not hits:
         return
-    with st.expander("查看检索来源"):
+    with st.expander("查看检索来源", expanded=False):
         st.caption("以下为检索候选片段；检索到片段不代表资料足以回答。答案中的引用编号表示使用的依据。")
-        for i, hit in enumerate(hits, 1):
-            st.write(f"[{i}] {hit.source} · 片段 {hit.chunk} · 相似度 {hit.score:.3f}")
-            image_id = hit.metadata.get("image_id")
-            image = _get_region_image(image_id) if image_id else None
-            if image_id:
-                image_column, text_column = st.columns([1, 2], gap="medium")
-                with image_column:
-                    if image:
-                        st.image(image, caption="PDF 来源区域", width=220)
-                    else:
-                        st.caption("图片区域暂不可用")
-                with text_column:
-                    st.text(hit.text or "（该图片切片没有可显示的文字）")
+        for number, hit in enumerate(hits, 1):
+            _render_source(number, hit, show_score=True)
+
+
+def _render_source(number: int, hit: Hit, *, show_score: bool, show_image: bool = True) -> None:
+    label = f"[{number}] {hit.source} · 片段 {hit.chunk}"
+    if hit.metadata.get("page_start"):
+        start = hit.metadata["page_start"]
+        end = hit.metadata.get("page_end", start)
+        label += f" · 第 {start} 页" if start == end else f" · 第 {start}–{end} 页"
+    if show_score:
+        label += f" · 相似度 {hit.score:.3f}"
+    st.write(label)
+    locations = hit.metadata.get("duplicate_locations", [])
+    if len(locations) > 1:
+        references = []
+        for location in locations:
+            start, end = location.get("page_start"), location.get("page_end")
+            page = f"第 {start} 页" if start and (not end or end == start) else f"第 {start}–{end} 页" if start else "页码未知"
+            references.append(f"片段 {location['chunk']}（{page}）")
+        st.caption("相同文本合并展示，召回位置：" + "、".join(references))
+    render_image_text_sources(hit.metadata)
+    image_id = hit.metadata.get("image_id") if show_image else None
+    image = _get_region_image(image_id) if image_id else None
+    if image_id:
+        image_column, text_column = st.columns([1, 2], gap="medium")
+        with image_column:
+            if image:
+                render_image(image, caption="PDF 来源区域", width=220)
             else:
-                st.text(hit.text)
+                st.caption("图片区域暂不可用")
+        with text_column:
+            st.text(hit.text or "（该图片切片没有可显示的文字）")
+    else:
+        st.text(hit.text or "（该片段没有可显示的文字）")

@@ -2,6 +2,7 @@
 
 import tempfile
 import unittest
+from dataclasses import replace
 from unittest.mock import patch
 
 from langchain_core.documents import Document
@@ -12,6 +13,44 @@ from app.storage import ChromaKnowledgeStore
 
 
 class StorageTests(unittest.TestCase):
+    def test_same_name_different_content_is_preserved_and_reindex_is_scoped(self):
+        rag = RAGService(self.embeddings, store=self.store)
+        first, second = "苹果是一种水果。" * 10, "香蕉是一种水果。" * 10
+        rag.add_file("同名.txt", first.encode())
+        rag.add_file("同名.txt", second.encode())
+        self.assertEqual(self.store.stats().documents, 2)
+        original_ids = {doc.id for doc in self.store.documents()}
+        self.assertEqual(rag.add_file("同名.txt", second.encode()), 0)
+        rag = RAGService(self.embeddings, store=self.store, settings=replace(rag.settings, chunk_size=50, chunk_overlap=5))
+        rag.add_file("同名.txt", first.encode())
+        self.assertEqual({doc.id for doc in self.store.documents()}, original_ids)
+        records = self.store.query(limit=100).items
+        hashes = {record.metadata["content_hash"] for record in records}
+        self.assertEqual(len(hashes), 2)
+        for content_hash in hashes:
+            self.assertEqual(len({record.metadata["pipeline_fingerprint"] for record in records
+                                  if record.metadata["content_hash"] == content_hash}), 1)
+        self.assertTrue(any(record.text == second for record in records))
+
+    def test_same_basename_in_different_paths_is_not_replaced(self):
+        rag = RAGService(self.embeddings, store=self.store)
+        rag.add_file("folder-a/report.txt", "苹果资料".encode())
+        rag.add_file("folder-b/report.txt", "香蕉资料".encode())
+        self.assertEqual(self.store.stats().documents, 2)
+        self.assertEqual(set(self.store.sources()), {"folder-a/report.txt", "folder-b/report.txt"})
+
+    def test_same_name_failed_new_import_keeps_existing_content(self):
+        rag = RAGService(self.embeddings, store=self.store)
+        rag.add_file("report.txt", b"existing content")
+        original = self.store.collection.upsert
+        def fail_after_write(**kwargs):
+            original(**kwargs)
+            raise RuntimeError("write failed")
+        with patch.object(self.store.collection, "upsert", side_effect=fail_after_write), self.assertRaises(RuntimeError):
+            rag.add_file("report.txt", b"different content")
+        self.assertEqual(self.store.stats().documents, 1)
+        self.assertEqual(self.store.query().items[0].text, "existing content")
+
     def setUp(self):
         self.embeddings = DemoEmbedder()
         self.store = ChromaKnowledgeStore(self.embeddings)

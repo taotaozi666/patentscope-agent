@@ -9,3 +9,5 @@ class ChatMessage(TypedDict):
     content: str
     hits: NotRequired[list[Hit]]
     retrieval: NotRequired[bool]
+
+    downloads: NotRequired[list[str]]

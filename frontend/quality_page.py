@@ -7,6 +7,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import streamlit as st
+from frontend.image_components import render_image
 
 from app.pdf.preview import render_source_page, render_source_region
 from app.quality.service import inspect_saved_pdf
@@ -149,7 +150,7 @@ def render_quality_page(settings: Settings) -> None:
         st.write("**原 PDF**")
         try:
             original = repository.read_original(run["content_hash"])
-            st.image(render_source_page(original, page_no, highlight), caption=f"物理第 {page_no} 页；红框为所选问题的来源区域。")
+            render_image(render_source_page(original, page_no, highlight), caption=f"物理第 {page_no} 页；红框为所选问题的来源区域。")
         except (FileNotFoundError, ValueError, KeyError, TypeError):
             st.warning("原文件缺失或来源区域无效，请重新导入。")
     with right:
@@ -160,14 +161,14 @@ def render_quality_page(settings: Settings) -> None:
                                  expanded=item["kind"] in {"paragraph", "heading"}):
                     payload = item.get("payload", {})
                     origin = payload.get("text_origin", "native")
-                    origin_label = {"native": "原生文本", "ocr": "OCR 识别", "none": "无文字层"}.get(origin, origin)
+                    origin_label = {"native": "原生文本", "mixed": "原生文字与 OCR", "ocr": "OCR 识别", "none": "无文字层"}.get(origin, origin)
                     ocr_status = payload.get("ocr_status", "not_applicable")
                     ocr_label = {"recognized": "已识别", "no_text": "未识别到文字", "disabled": "未启用",
                                  "unavailable": "不可用", "not_needed": "无需 OCR", "not_applicable": "不适用"}.get(ocr_status, ocr_status)
                     st.caption(f"类型：{payload.get('doc_type_kwd', 'text')} · 布局：{payload.get('layout_type', item['kind'])} · 文本来源：{origin_label} · OCR：{ocr_label}")
-                    if item["kind"] in {"image", "table"} and original is not None:
+                    if (item["kind"] in {"image", "table"} or payload.get("original_kind") in {"image", "table"}) and original is not None:
                         try:
-                            st.image(render_source_region(original, item["span"]), caption=f"第 {page_no} 页 · {item['kind']} 区域裁图")
+                            render_image(render_source_region(original, item["span"]), caption=f"第 {page_no} 页 · {item['kind']} 区域裁图")
                         except (ValueError, IndexError, KeyError, TypeError):
                             st.caption("区域裁图暂不可用，可查看左侧原页高亮。")
                     element_text = item["text"] or payload.get("ocr_text", "")

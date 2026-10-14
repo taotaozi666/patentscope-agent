@@ -3,6 +3,7 @@
 import json
 
 import streamlit as st
+from frontend.image_components import render_image, render_image_text_sources
 
 from app.config import get_settings
 
@@ -23,6 +24,7 @@ def render_pdf_sources(metadata: dict) -> None:
             st.warning("解析来源记录不存在，请检查文档资产目录或重新导入。")
             return
         data = saved["metadata"]
+        render_image_text_sources(data)
         st.caption(f"PDF 第 {data['page_start']}–{data['page_end']} 页 · {data['section_path'] or '未确定章节'}")
         st.caption(f"内容类型：{data.get('doc_type_kwd', 'text')} · 布局类型：{data.get('layout_type', 'text')} · OCR：{data.get('ocr_status', 'not_applicable')}")
         if data.get("attributes_json"):
@@ -56,18 +58,18 @@ def render_pdf_sources(metadata: dict) -> None:
                         try:
                             saved_region = repository.get_region_image(str(data.get("image_id", "")))
                             region = saved_region or render_source_region(original, element["span"])
-                            st.image(region, caption=f"{data['doc_type_kwd']} 区域裁图 · 第 {element['span']['page_no']} 页")
+                            render_image(region, caption=f"{data['doc_type_kwd']} 区域裁图 · 第 {element['span']['page_no']} 页")
                             shown_region = True
                         except (ValueError, IndexError, KeyError, TypeError):
                             st.caption("区域裁图暂不可用。")
                 if not shown_region and spans:
                     try:
-                        st.image(render_source_region(original, spans[0]), caption=f"{data['doc_type_kwd']} 来源区域裁图")
+                        render_image(render_source_region(original, spans[0]), caption=f"{data['doc_type_kwd']} 来源区域裁图")
                     except (ValueError, IndexError, KeyError, TypeError):
                         st.caption("区域裁图暂不可用。")
             elif spans:
                 try:
-                    st.image(render_source_region(original, spans[0]), caption=f"{data['doc_type_kwd']} 来源区域裁图")
+                    render_image(render_source_region(original, spans[0]), caption=f"{data['doc_type_kwd']} 来源区域裁图")
                 except (ValueError, IndexError, KeyError, TypeError):
                     st.caption("区域裁图暂不可用。")
         candidates = [item for item in mappings if item.get("span") and item.get("cell_id") and item["end"] > item["start"]]
@@ -83,7 +85,7 @@ def render_pdf_sources(metadata: dict) -> None:
         pages = sorted({span["page_no"] for span in spans})
         selected = st.selectbox("来源物理页码", pages, key=f"pdf_page_{chunk_id}")
         if selected is not None:
-            st.image(render_source_page(original, selected, spans), caption="红框标出片段或所选单元格的原始来源区域。")
+            render_image(render_source_page(original, selected, spans), caption="红框标出片段或所选单元格的原始来源区域。")
         else:
             st.warning("该片段没有可用的来源页码。")
         st.text(saved["text"])

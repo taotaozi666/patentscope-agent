@@ -1,4 +1,7 @@
 import unittest
+from unittest.mock import patch
+
+from langchain_core.documents import Document
 
 from app.rag.embeddings import DemoEmbedder
 from app.rag import RAGService, answer, direct_reply
@@ -12,6 +15,42 @@ def make_rag():
 
 
 class RAGTests(unittest.TestCase):
+    def test_publication_scope_applies_before_top_k_and_unknown_does_not_fall_back(self):
+        rag = make_rag()
+        rag.store.add_documents([
+            Document(page_content="苹果检索技术方案摘要", metadata={"source": f"other-{index}.pdf",
+                     "publication_number": "CN987654321A", "patent_section": "abstract"})
+            for index in range(12)
+        ] + [Document(page_content="专利权利要求1：苹果接收问题并返回结果", metadata={"source": "target.pdf",
+                      "publication_number": "cn 123456789 a", "patent_section": "claims"})])
+        for question in ("介绍 cn 123456789 a 的专利", "CN123456789A 权利要求1是什么？"):
+            hits = rag.search(question, 1)
+            self.assertEqual(len(hits), 1)
+            self.assertEqual(hits[0].source, "target.pdf")
+            self.assertEqual(hits[0].metadata["publication_number"], "CN123456789A")
+        self.assertEqual(rag.search("CN111111111A 权利要求1是什么？"), [])
+        hits = rag.search("比较 CN123456789A 和 CN987654321A 的技术方案", 20)
+        self.assertEqual({hit.metadata["publication_number"] for hit in hits},
+                         {"CN123456789A", "CN987654321A"})
+
+    def test_specific_patent_question_does_not_request_overview(self):
+        rag = make_rag()
+        rag.store.add_documents([Document(page_content="检索方法", metadata={"source": "target.pdf",
+                                 "publication_number": "CN123456789A"})])
+        with patch.object(rag.embedder, "embed_query", wraps=rag.embedder.embed_query) as embed:
+            rag.search("介绍专利 CN123456789A 的权利要求1", 1)
+            self.assertEqual(embed.call_count, 1)
+        with patch.object(rag.embedder, "embed_query", wraps=rag.embedder.embed_query) as embed:
+            rag.search("介绍专利 CN123456789A", 1)
+            self.assertEqual(embed.call_count, 2)
+
+    def test_publication_filename_is_searchable(self):
+        rag = make_rag()
+        rag.add_file("CN123456789A.txt", "检索方法接收问题".encode())
+        hits = rag.search("CN123456789A 接收什么？")
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0].source, "CN123456789A.txt")
+
     def test_direct_reply_recognizes_complete_greetings_and_introductions(self):
         for question in ("你好，你是?", "您好！", "你是谁？", "你好，你能做什么？", "Hello!", "Who are you?"):
             with self.subTest(question=question):

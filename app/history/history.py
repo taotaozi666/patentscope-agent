@@ -24,6 +24,8 @@ class ChatHistory:
         copied: ChatMessage = {"role": message["role"], "content": message["content"]}
         if "hits" in message:
             copied["hits"] = list(message["hits"])
+        if "downloads" in message:
+            copied["downloads"] = list(message["downloads"])
         if "retrieval" in message:
             copied["retrieval"] = message["retrieval"]
         return copied
@@ -36,7 +38,7 @@ class ChatHistory:
         return [self._copy(message) for message in self._messages]
 
     def add_turn(
-        self, question: str, reply: str, hits: Sequence[Hit] = (), *, retrieval: bool = True
+        self, question: str, reply: str, hits: Sequence[Hit] = (), *, retrieval: bool = True, downloads: Sequence[str] = ()
     ) -> None:
         """成功得到回答后一次性保存一轮对话，失败时调用方不执行此方法。"""
         user: ChatMessage = {"role": "user", "content": question}
@@ -45,7 +47,7 @@ class ChatHistory:
         self._messages.extend(
             [
                 user,
-                {"role": "assistant", "content": reply, "hits": list(hits)},
+                {"role": "assistant", "content": reply, "hits": list(hits), "downloads": list(downloads)},
             ]
         )
 

@@ -6,8 +6,9 @@ from hashlib import sha256
 from uuid import NAMESPACE_URL, uuid5
 
 from app.schemas.pdf import ParsedPdf, PdfElement, SemanticObject, SourceSpan
+from .normalization import PATENT_PARAGRAPH_START
 
-OBJECT_VERSION = "semantic-objects-v2"
+OBJECT_VERSION = "semantic-objects-v4"
 
 
 def build_objects(parsed: ParsedPdf) -> list[SemanticObject]:
@@ -69,6 +70,8 @@ def build_objects(parsed: ParsedPdf) -> list[SemanticObject]:
         add("figure", f"图{number}", text, spans, mappings,
             {"figure_number": number, "image_element_ids": [element.id for element in candidates[:1]],
              "image_id": image.payload.get("image_id") if image else sha256(f"{parsed.content_hash}:figure:{caption.id}".encode()).hexdigest(),
+             "native_text": image.payload.get("native_text", "") if image else "",
+             "caption_text": caption.text, "description_text": "\n".join(item.text for item in descriptions),
              "caption_id": caption.id, "description_ids": [element.id for element in descriptions],
              "visual_status": "not_analyzed", "requires_review": len(candidates) != 1,
              "region_method": "image_caption" if candidates else "caption_candidate",
@@ -78,8 +81,8 @@ def build_objects(parsed: ParsedPdf) -> list[SemanticObject]:
              "text_origin": image.payload.get("text_origin", "native") if image and image.text.strip() else "native",
              "properties": {"figure_number": number, "caption": caption.text,
                             "image_id": image.payload.get("image_id") if image else sha256(f"{parsed.content_hash}:figure:{caption.id}".encode()).hexdigest(),
-                            "has_ocr_text": bool(image and image.payload.get("text_origin") == "ocr" and image.text.strip()),
-                            "has_embedded_text": bool(image and image.text.strip())}})
+                            "has_ocr_text": bool(image and image.payload.get("ocr_text")),
+                            "has_embedded_text": bool(image and image.payload.get("native_text"))}})
         if image:
             consumed_images.add(image.id)
         consumed.add(caption.id)
@@ -92,18 +95,20 @@ def build_objects(parsed: ParsedPdf) -> list[SemanticObject]:
         add("figure", f"图片区域 / 第 {image.span.page_no} 页", text, [image.span], mappings,
             {"image_element_ids": [image.id], "image_id": image.payload.get("image_id"),
              "section_path": image.section_path, "doc_type_kwd": "image", "layout_type": "image",
+             "native_text": image.payload.get("native_text", ""),
+             "caption_text": "", "description_text": "",
              "ocr_text": image.payload.get("ocr_text", ""),
              "ocr_status": image.payload.get("ocr_status", "unknown"),
              "text_origin": image.payload.get("text_origin", "none"),
              "properties": {**image.payload.get("properties", {}),
-                            "has_ocr_text": image.payload.get("text_origin") == "ocr",
-                            "has_embedded_text": bool(image.text.strip())}})
+                            "has_ocr_text": bool(image.payload.get("ocr_text")),
+                            "has_embedded_text": bool(image.payload.get("native_text"))}})
 
     pending: list[PdfElement] = []
 
     def flush() -> None:
         if pending:
-            text, mappings = _join(pending)
+            text, mappings = _join(pending, numbered_paragraphs=True)
             add("text", pending[0].section_path or "未确定章节", text, [element.span for element in pending], mappings,
                 {"patent_section": pending[0].payload.get("patent_section", ""), "element_ids": [element.id for element in pending],
                  "doc_type_kwd": "text", "layout_type": "text", "properties": {"section_path": pending[0].section_path}})
@@ -147,12 +152,16 @@ def build_objects(parsed: ParsedPdf) -> list[SemanticObject]:
     return result
 
 
-def _join(elements: list[PdfElement]) -> tuple[str, list[dict]]:
+def _join(elements: list[PdfElement], *, numbered_paragraphs: bool = False) -> tuple[str, list[dict]]:
     text = ""
     mappings = []
+    in_numbered_paragraph = False
     for element in elements:
+        starts_number = bool(PATENT_PARAGRAPH_START.match(element.text.lstrip()))
         if text:
-            text += "\n\n"
+            # 编号段落可以跨文本块、跨页。单换行交由规范化判断是新编号还是续文；
+            # 普通正文、图注和图像 OCR 仍保留原有段落分隔。
+            text += "\n" if numbered_paragraphs and (starts_number or in_numbered_paragraph) else "\n\n"
         start = len(text)
         text += element.text
         is_ocr = element.payload.get("text_origin") == "ocr"
@@ -161,4 +170,7 @@ def _join(elements: list[PdfElement]) -> tuple[str, list[dict]]:
         if not is_ocr:
             mapping.update(source_char_start=0, source_char_end=len(element.text))
         mappings.append(mapping)
+        if numbered_paragraphs and any(PATENT_PARAGRAPH_START.match(line.lstrip())
+                                       for line in element.text.splitlines()):
+            in_numbered_paragraph = True
     return text, mappings

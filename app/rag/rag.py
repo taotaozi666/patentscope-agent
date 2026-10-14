@@ -12,6 +12,7 @@ from openai import OpenAI
 
 from app.config import get_settings
 from app.rag.documents import loaders, split_documents
+from app.rag.retrieval import merge_candidates
 from app.rag.embeddings import DemoEmbedder, SemanticEmbedder, create_embeddings
 from app.history import ChatHistory, as_history
 from app.models import generate_reply
@@ -19,6 +20,7 @@ from app.patent_identifiers import publication_numbers
 from app import prompt
 from app.schemas import ChatMessage, ChunkRecord, Hit, Settings
 from app.storage import KnowledgeStore, create_store
+from app.storage.source_repository import SourceRepository
 from app.trace import debug_step, print_step, trace_operation
 
 
@@ -68,6 +70,7 @@ class RAGService:
                 message = getattr(loader, "import_message", None)
                 self.last_import_message = message or None
             content_hash = sha256(content).hexdigest()
+            SourceRepository(self.settings.pdf_directory).save(content, Path(source).suffix.lower())
             pipeline_fingerprint = self._pipeline_fingerprint(
                 content_hash, Path(source).suffix.lower()
             )
@@ -86,6 +89,8 @@ class RAGService:
         """程序直接传入文本时也转换为统一文档对象。"""
         content = text.encode("utf-8")
         content_hash = sha256(content).hexdigest()
+        original_format = ".md" if Path(source).suffix.lower() == ".md" else ".txt"
+        SourceRepository(self.settings.pdf_directory).save(content, original_format)
         return self.add_documents(
             [
                 Document(
@@ -94,6 +99,7 @@ class RAGService:
                         "source": source,
                         "format": Path(source).suffix.lower() or ".txt",
                         "content_hash": content_hash,
+                        "original_format": original_format,
                         "pipeline_fingerprint": self._pipeline_fingerprint(
                             content_hash, Path(source).suffix.lower() or ".txt"
                         ),
@@ -230,34 +236,36 @@ class RAGService:
         queries = [question]
         if overview_query:
             queries.append(f"{' '.join(numbers)} {_PATENT_OVERVIEW_QUERY}".strip())
-        candidate_limit = min(count, top_k * (3 if overview_query else 1))
-        candidates: dict[str, tuple[ChunkRecord, float]] = {}
-        for query_text in queries:
-            query = self.embedder.embed_query(query_text)
-            matches = (self.store.nearest(query, candidate_limit, publication_numbers=numbers)
-                       if numbers else self.store.nearest(query, candidate_limit))
-            for record, score in matches:
-                key = record.id
-                previous = candidates.get(key)
-                if previous is None or score > previous[1]:
-                    candidates[key] = (record, score)
+        candidate_limit = min(count, top_k * 3)
+        query_vectors = [self.embedder.embed_query(text) for text in queries]
         print_step("问题向量生成完成", 查询向量数=len(queries))
-        if overview_query:
-            def patent_priority(item: tuple[ChunkRecord, float]) -> tuple[float, float]:
+        while True:
+            candidates: dict[str, tuple[ChunkRecord, float]] = {}
+            exhausted = True
+            for query in query_vectors:
+                matches = (self.store.nearest(query, candidate_limit, publication_numbers=numbers)
+                           if numbers else self.store.nearest(query, candidate_limit))
+                if len(matches) == candidate_limit:
+                    exhausted = False
+                for record, score in matches:
+                    previous = candidates.get(record.id)
+                    if previous is None or score > previous[1]:
+                        candidates[record.id] = (record, score)
+            def priority(item):
                 record, score = item
-                metadata = record.metadata
-                section = str(metadata.get("patent_section", "")).lower()
-                boost = {"cover": .10, "abstract": .08, "claims": .025}.get(section, 0.0)
+                section = str(record.metadata.get("patent_section", "")).lower()
+                boost = {"cover": .10, "abstract": .08, "claims": .025}.get(section, 0.0) if overview_query else 0
                 return (score + boost, score)
-            ranked = sorted(candidates.values(), key=patent_priority, reverse=True)
-        else:
-            ranked = sorted(candidates.values(), key=lambda item: item[1], reverse=True)
-        hits = [Hit(record.source, record.text, score, record.chunk, dict(record.metadata))
-                for record, score in ranked[:top_k]]
+            ranked = sorted(candidates.values(), key=priority, reverse=True)
+            unique = merge_candidates(ranked)
+            if len(unique) >= top_k or exhausted or candidate_limit >= count:
+                hits = unique[:top_k]
+                break
+            candidate_limit = min(count, candidate_limit * 2)
         print_step(
             "检索结果",
             结果数量=len(hits),
-            排序依据="指定公开号限定范围；概览问题优先著录信息与摘要，其余按向量相似度",
+            排序依据="指定公开号限定范围；概览问题优先著录信息与摘要，其余按向量相似度；过滤纯公开号并合并同文档重复文本",
         )
         debug_step("检索原文", lambda: {
             "片段": [

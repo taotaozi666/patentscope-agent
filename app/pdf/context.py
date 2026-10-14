@@ -46,7 +46,7 @@ def enhance_context(parsed: ParsedPdf, chunks: list[Document], settings: Setting
                             raise ValueError("上下文为空")
                         repository.save_context(cache_id, context, settings.chat_model, PDF_CONTEXT_VERSION)
                     chunk.metadata.update(context_text=chunk.metadata["context_text"] + "\n" + context,
-                                          context_method="model", context_version=PDF_CONTEXT_VERSION,
+                                          generated_context=context, context_method="model", context_version=PDF_CONTEXT_VERSION,
                                           context_model=settings.chat_model, context_is_evidence=False)
                     chunk.metadata["pdf_context"] = chunk.metadata["context_text"]
                     chunk.metadata["_pdf_index_text"] = chunk.metadata["context_text"] + "\n" + chunk.page_content

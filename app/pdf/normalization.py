@@ -4,7 +4,9 @@ from bisect import bisect_left
 import re
 from typing import Any
 
-PDF_TEXT_NORMALIZATION_VERSION = "pdf-soft-wrap-v3"
+PDF_TEXT_NORMALIZATION_VERSION = "pdf-soft-wrap-v4"
+
+PATENT_PARAGRAPH_START = re.compile(r"^\[\d{3,}\]")
 
 _STRUCTURE_START = re.compile(
     r"^(?:\[\d{3,}\]|\(?\d+[.)、]|[（(][一二三四五六七八九十百\d]+[）)]|"
@@ -40,6 +42,7 @@ def normalize_pdf_text(text: str, mappings: list[dict[str, Any]] | None = None
     previous = ""
     pending_breaks: list[int] = []
     had_blank_line = False
+    numbered_paragraph = False
 
     def append(value: str, positions: list[int]) -> None:
         output.append(value)
@@ -56,7 +59,10 @@ def normalize_pdf_text(text: str, mappings: list[dict[str, Any]] | None = None
 
         if previous:
             break_pos = pending_breaks[0] if pending_breaks else max(0, start - 1)
-            if had_blank_line:
+            if PATENT_PARAGRAPH_START.match(line):
+                # 专利编号是明确段界，不继承 PDF 文本块引入的额外空行。
+                append("\n", [break_pos])
+            elif had_blank_line and not numbered_paragraph:
                 positions = (pending_breaks[:2] if len(pending_breaks) >= 2
                              else [break_pos, break_pos])
                 append("\n\n", positions)
@@ -68,6 +74,8 @@ def normalize_pdf_text(text: str, mappings: list[dict[str, Any]] | None = None
                     append(separator, [break_pos] * len(separator))
 
         append(line, list(range(line_start, line_start + len(line))))
+        if PATENT_PARAGRAPH_START.match(line):
+            numbered_paragraph = True
         previous = line
         pending_breaks = line_breaks
         had_blank_line = False
@@ -132,3 +140,15 @@ def _soft_wrap_separator(previous: str, current: str) -> str:
     if left[-1].isalnum() and right[0].isalnum():
         return " "
     return ""
+
+
+def is_page_number_region(text: str, page_no: int, bbox) -> bool:
+    """小型页底数字区域，数字必须与物理页码一致；不处理公式或整页图片。"""
+    tokens = text.split()
+    if not tokens or not all(token.isascii() and token.isdecimal() and int(token) == page_no for token in tokens):
+        return False
+    if len(bbox) != 4:
+        return False
+    x0, y0, x1, y1 = bbox
+    return (0 <= x0 < x1 <= 1 and .90 <= y0 < y1 <= 1
+            and y1 - y0 <= .05 and x1 - x0 <= .3)

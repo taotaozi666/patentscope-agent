@@ -14,6 +14,8 @@ from app.history import get_session_history
 from app.models import create_client
 from app.rag import RAGService, answer, direct_reply
 from app.trace import configure_logging, debug_step, print_step, trace_operation
+from app.downloads import is_download_request, resolve_downloads
+from frontend.source_components import render_downloads
 from frontend.chat_components import render_message
 from frontend.ingestion_page import render_ingestion_page
 from frontend.knowledge_page import render_knowledge_page
@@ -52,7 +54,10 @@ with st.sidebar:
         index=1 if settings.api_key else 0,
     )
     top_k = st.slider("检索片段数", 1, 12, 8)
-    st.caption("语义检索和回答生成使用已配置的模型服务，相关资料和最近聊天会发送给该服务。")
+    if backend == "离线演示（字符匹配）":
+        st.caption("离线模式使用本地字符匹配并展示检索原文；PDF 使用本地规则上下文。")
+    else:
+        st.caption("语义检索和回答生成使用已配置的模型服务，相关资料和最近聊天会发送给该服务。")
     st.caption("同一检索模型的本地知识库由各会话共享；清空只作用于当前模型的集合。")
 
 backend_config = (
@@ -125,8 +130,10 @@ if page == "导入任务":
 
 if backend == "离线演示（字符匹配）":
     st.info("当前为演示模式，知识库问题展示检索原文；问候和助手介绍可直接回答。")
-for message in history.messages():
+for message_index, message in enumerate(history.messages()):
     render_message(message["role"], message["content"], message.get("hits", []))
+    if message.get("downloads"):
+        render_downloads(rag.store, message["downloads"], f"chat_download_{message_index}")
 
 if question := st.chat_input("围绕已导入文档提问"):
     with trace_operation("聊天", 问题字符数=len(question), 检索模式=backend):
@@ -134,10 +141,16 @@ if question := st.chat_input("围绕已导入文档提问"):
         render_message("user", question)
         client = None
         try:
-            reply = direct_reply(question)
+            downloads = []
+            downloading = is_download_request(question)
+            if downloading:
+                downloads, reply = resolve_downloads(question, rag.store, history, rag.search)
+                print_step("下载路由", 候选文档数=len(downloads))
+            else:
+                reply = direct_reply(question)
             retrieval = reply is None
             hits = []
-            print_step("问题处理", 处理方式="知识库检索" if retrieval else "固定说明")
+            print_step("问题处理", 处理方式="文件下载" if downloading else ("知识库检索" if retrieval else "固定说明"))
             if reply is None:
                 with st.spinner("正在检索知识库…"):
                     retrieval_question = history.retrieval_question(question)
@@ -152,10 +165,12 @@ if question := st.chat_input("围绕已导入文档提问"):
                 client = create_client(settings) if hits and rag.settings.api_key else None
                 with st.spinner("正在生成回答…"):
                     reply = answer(question, hits, history, client, settings.chat_model)
-            else:
+            elif not downloading:
                 print_step("固定说明", 流转="跳过模型调用与知识库检索")
             render_message("assistant", reply, hits)
-            history.add_turn(question, reply, hits, retrieval=retrieval)
+            if downloads:
+                render_downloads(rag.store, downloads, f"chat_download_{len(history) + 1}")
+            history.add_turn(question, reply, hits, retrieval=retrieval, downloads=downloads)
             print_step(
                 "页面接收最终结果",
                 回答字符数=len(reply),

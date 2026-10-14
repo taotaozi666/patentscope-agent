@@ -9,8 +9,9 @@ import pymupdf
 
 from app.schemas.pdf import NativeImageInfo, NativeTextPage, ParsedPdf, PdfElement, SourceSpan
 from .patent import PATENT_VERSION, extract_patent
+from .normalization import is_page_number_region
 
-PARSER_VERSION = f"native-v5:{PATENT_VERSION}:pymupdf-{pymupdf.VersionBind}"
+PARSER_VERSION = f"native-v9:{PATENT_VERSION}:pymupdf-{pymupdf.VersionBind}"
 
 
 def _span(
@@ -129,6 +130,7 @@ def parse_pdf(source: str, content: bytes, *, ocr_images: bool = True,
                 flags=pymupdf.TEXTFLAGS_DICT & ~pymupdf.TEXT_PRESERVE_IMAGES))
             raw_blocks = text_page["blocks"]
             text_blocks = [block for block in raw_blocks if block["type"] == 0]
+            _remove_overlapping_text(text_blocks)
             images = _deduplicate_image_infos(cast(list[NativeImageInfo], page.get_image_info()))
             if not any(line.get("spans") for block in text_blocks for line in block["lines"]):
                 if images or len(page.get_drawings()) > 100:
@@ -137,7 +139,7 @@ def parse_pdf(source: str, content: bytes, *, ocr_images: bool = True,
                         try:
                             recognized = _ocr_blocks(page, ocr_language, ocr_dpi, full=True)
                         except Exception as exc:
-                            warnings.append(f"第 {page_no} 页 OCR 未可用：{type(exc).__name__}。请安装 Tesseract 及 {ocr_language} 语言包。")
+                            warnings.append(f"第 {page_no} 页整页 OCR 失败，未能提取扫描文字。{_ocr_failure_reason(exc, ocr_language)}")
                     text = "\n".join(value for _, value in recognized).strip()
                     if text:
                         image_element_id = f"p{page_no}_page_image"
@@ -146,7 +148,7 @@ def parse_pdf(source: str, content: bytes, *, ocr_images: bool = True,
                             image_element_id, "image", text,
                             SourceSpan(page_no, page.get_label() or "", (0.0, 0.0, 1.0, 1.0), image_element_id, "page"),
                             payload={"doc_type_kwd": "image", "layout_type": "page_image", "image_id": image_id,
-                                     "ocr_text": text, "ocr_status": "recognized", "text_origin": "ocr",
+                                     "native_text": "", "ocr_text": text, "ocr_status": "recognized", "text_origin": "ocr",
                                      "properties": {"width": page.rect.width, "height": page.rect.height,
                                                     "ocr_engine": "tesseract", "ocr_language": ocr_language,
                                                     "ocr_dpi": ocr_dpi}},
@@ -220,38 +222,41 @@ def parse_pdf(source: str, content: bytes, *, ocr_images: bool = True,
                                            font_size, payload={"doc_type_kwd": "text", "layout_type": "paragraph",
                                                               "text_origin": "native", "properties": {"font_size": font_size}}))
             image_texts = list(image_native_text)
+            image_ocr_texts = [""] * len(images)
             image_origins = ["native" if text else "none" for text in image_texts]
             image_status = ["not_needed" if text else "disabled" if not ocr_images else "no_text"
                             for text in image_texts]
-            if images and ocr_images and any(not text for text in image_texts):
-                # 资格取决于原生文字；收到第一个 OCR 块后仍需接收该图的后续块。
-                ocr_targets = {index for index, text in enumerate(image_native_text) if not text}
+            if images and ocr_images:
+                # 包括已有部分文字层的图片，OCR 补充内容独立保存。
+                ocr_targets = set(range(len(images)))
+                image_status = ["no_text"] * len(images)
                 try:
-                    recognized = _ocr_blocks(page, ocr_language, ocr_dpi, full=False)
+                    recognized = _ocr_blocks(page, ocr_language, ocr_dpi, full=True)
                     for bbox, text in recognized:
                         text_rect = pymupdf.Rect(bbox)
                         matches = []
                         for image_index, image in enumerate(images):
                             overlap = text_rect & pymupdf.Rect(image["bbox"])
-                            if not overlap.is_empty:
+                            if not overlap.is_empty and overlap.get_area() >= text_rect.get_area() * .65:
                                 matches.append((overlap.get_area(), image_index))
                         matches = [match for match in matches if match[1] in ocr_targets]
                         if matches:
                             _, image_index = max(matches)
-                            image_texts[image_index] = (image_texts[image_index] + "\n" + text).strip()
+                            image_ocr_texts[image_index] = (image_ocr_texts[image_index] + "\n" + text).strip()
+                            image_texts[image_index] = _merge_image_text(image_native_text[image_index], image_ocr_texts[image_index])
                             image_status[image_index] = "recognized"
-                            image_origins[image_index] = "ocr"
+                            image_origins[image_index] = "mixed" if image_native_text[image_index] else "ocr"
                 except Exception as exc:
-                    image_status = ["unavailable" if not image_texts[index] else image_status[index]
-                                    for index in range(len(images))]
-                    warnings.append(f"第 {page_no} 页图片 OCR 未可用：{type(exc).__name__}。请安装 Tesseract 及 {ocr_language} 语言包。")
+                    image_status = ["unavailable"] * len(images)
+                    warnings.append(f"第 {page_no} 页有 {len(ocr_targets)} 个图片区域未能完成补充 OCR；图片及已有原生文字仍保留，未覆盖的文字可能缺失。{_ocr_failure_reason(exc, ocr_language)}")
             for image_index, image in enumerate(images):
                 element_id = f"p{page_no}_image{image_index}"
                 image_id = sha256(f"{content_hash}:{element_id}".encode()).hexdigest()
                 elements.append(PdfElement(
                     element_id, "image", image_texts[image_index], _span(page, image["bbox"], element_id),
                     payload={"doc_type_kwd": "image", "layout_type": "image", "image_id": image_id,
-                             "ocr_text": image_texts[image_index] if image_origins[image_index] == "ocr" else "",
+                             "native_text": image_native_text[image_index],
+                             "ocr_text": image_ocr_texts[image_index],
                              "ocr_status": image_status[image_index],
                              "text_origin": image_origins[image_index],
                              "properties": {"xref": image.get("xref"), "width": image.get("width"),
@@ -273,19 +278,11 @@ def parse_pdf(source: str, content: bytes, *, ocr_images: bool = True,
         # 简单原生版面基线：按页内块顺序排列，复杂双栏不宣称已可靠恢复。
         elements.sort(key=lambda item: (item.span.page_no, item.span.bbox[1], item.span.bbox[0]))
         body_size = median(sizes) if sizes else 11
-        repeated: dict[str, set[int]] = {}
-        for element in elements:
-            if element.kind == "paragraph" and (element.span.bbox[3] < 0.08 or element.span.bbox[1] > 0.94):
-                normalized = re.sub(r"\d+", "#", element.text)
-                repeated.setdefault(normalized, set()).add(element.span.page_no)
+        _mark_repeated_furniture(elements, document.page_count)
         headings: list[tuple[int, str]] = []
         for element in elements:
             if element.kind != "paragraph":
                 element.section_path = " / ".join(title for _, title in headings)
-                continue
-            normalized = re.sub(r"\d+", "#", element.text)
-            if len(repeated.get(normalized, set())) >= max(3, document.page_count * 0.6):
-                element.kind = "furniture"
                 continue
             level = bookmarks.get((element.span.page_no, element.text), 0)
             if not level and len(element.text) <= 100 and element.font_size > body_size * 1.2:
@@ -306,3 +303,82 @@ def parse_pdf(source: str, content: bytes, *, ocr_images: bool = True,
         if parsed.patent:
             parsed.warnings.extend(parsed.patent.warnings)
         return parsed
+
+
+def _mark_repeated_furniture(elements: list[PdfElement], page_count: int) -> None:
+    """只过滤页边缘短区域，不因正文与页眉同文而删除正文或整页扫描图。"""
+    page_numbers = [element for element in elements
+                    if element.kind in {"paragraph", "image"}
+                    and is_page_number_region(element.text, element.span.page_no, element.span.bbox)]
+    for element in page_numbers:
+        # 至少三个页面在相同位置出现对应页码，避免孤立正文数字被误判。
+        matches = {other.span.page_no for other in page_numbers
+                   if all(abs(a - b) < .025 for a, b in zip(element.span.bbox, other.span.bbox))}
+        if len(matches) >= 3:
+            element.payload["original_kind"] = element.kind
+            element.payload["layout_type"] = "furniture"
+            element.payload["furniture_type"] = "page_number"
+            element.kind = "furniture"
+    groups: dict[str, list[PdfElement]] = {}
+    for element in elements:
+        if element.kind not in {"paragraph", "image"}:
+            continue
+        if not (element.span.bbox[3] < 0.12 or element.span.bbox[1] > 0.92):
+            continue
+        text = re.sub(r"\s+", "", element.text)
+        if not text or len(text) > 150:
+            continue
+        normalized = re.sub(r"\d+", "#", text)
+        groups.setdefault(normalized, []).append(element)
+    for members in groups.values():
+        pages = {element.span.page_no for element in members}
+        if len(pages) < max(3, page_count * 0.6):
+            continue
+        for element in members:
+            element.payload["original_kind"] = element.kind
+            element.payload["layout_type"] = "furniture"
+            element.kind = "furniture"
+
+
+def _remove_overlapping_text(blocks) -> None:
+    """同页相同文字且区域几乎重合才去重；保留不同位置的重复数字。"""
+    seen = {}
+    for block in blocks:
+        for line in block["lines"]:
+            retained = []
+            for span in line["spans"]:
+                text = span["text"]
+                box = span.get("bbox")
+                if not text.strip() or box is None:
+                    retained.append(span)
+                    continue
+                rect = pymupdf.Rect(box)
+                duplicate = any(
+                    min(rect.get_area(), old.get_area()) > 0
+                    and (rect & old).get_area() / min(rect.get_area(), old.get_area()) >= .95
+                    and all(abs(a-b) <= 1 for a, b in zip(rect, old))
+                    for old in seen.get(text, [])
+                )
+                if not duplicate:
+                    retained.append(span)
+                    seen.setdefault(text, []).append(rect)
+            line["spans"] = retained
+
+
+def _ocr_failure_reason(exc: Exception, language: str) -> str:
+    detail = str(exc).lower()
+    if any(token in detail for token in ("tessdata", "tesseract is not installed", "failed loading language", "traineddata")):
+        return f"OCR 环境或语言数据不可用，请检查 Tesseract、{language} 语言包及 TESSDATA_PREFIX 配置。"
+    return f"OCR 执行失败（{type(exc).__name__}），需检查引擎或图片处理情况，不能据此判断缺少安装。"
+
+
+def _merge_image_text(native: str, ocr: str) -> str:
+    """保留各通道原文；用于检索的组合文本仅去除相同的行。"""
+    lines = native.splitlines()
+    known = {re.sub(r"\s+", " ", line).strip() for line in lines}
+    for line in ocr.splitlines():
+        key = re.sub(r"\s+", " ", line).strip()
+        if key and key not in known:
+            lines.append(line)
+            known.add(key)
+    return "\n".join(lines).strip()

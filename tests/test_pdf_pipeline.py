@@ -53,16 +53,23 @@ class PdfTests(unittest.TestCase):
             content = document.tobytes()
         blocks = [((60, 120, 200, 140), "First OCR block"),
                   ((60, 160, 200, 180), "Second OCR block"),
-                  ((300, 120, 460, 140), "Duplicate OCR text")]
+                  ((300, 120, 460, 140), "Native image text"),
+                  ((300, 180, 460, 200), "Additional OCR label")]
         with patch("app.pdf.parser._ocr_blocks", return_value=blocks) as ocr:
             parsed = parse_pdf("images.pdf", content)
         ocr.assert_called_once()
         images = [element for element in parsed.elements if element.kind == "image"]
         recognized = next(element for element in images if element.payload["text_origin"] == "ocr")
         self.assertEqual(recognized.text, "First OCR block\nSecond OCR block")
-        native = next(element for element in images if element.payload["text_origin"] == "native")
-        self.assertEqual(native.text, "Native image text")
-        self.assertNotIn("Duplicate OCR text", "\n".join(element.text for element in parsed.elements))
+        native = next(element for element in images if element.payload["text_origin"] == "mixed")
+        self.assertEqual(native.text, "Native image text\nAdditional OCR label")
+        self.assertEqual(native.payload["native_text"], "Native image text")
+        self.assertEqual(native.payload["ocr_text"], "Native image text\nAdditional OCR label")
+        chunks = build_chunks(parsed)
+        mixed = next(chunk for chunk in chunks if chunk.metadata.get("image_native_text"))
+        self.assertEqual(mixed.metadata["image_native_text"], "Native image text")
+        self.assertIn("Additional OCR label", mixed.metadata["image_ocr_text"])
+        self.assertEqual(mixed.page_content.count("Native image text"), 1)
 
     def test_offline_pdf_worker_skips_model_context_even_with_key(self):
         with TemporaryDirectory(ignore_cleanup_errors=True) as directory:

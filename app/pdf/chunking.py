@@ -12,7 +12,7 @@ from app.schemas.pdf import ParsedPdf, SemanticObject
 from .normalization import PDF_TEXT_NORMALIZATION_VERSION, normalize_pdf_text
 from .objects import build_objects
 
-CHUNKER_VERSION = "semantic-chunks-v7"
+CHUNKER_VERSION = "semantic-chunks-v8"
 
 
 def build_chunks(parsed: ParsedPdf, size: int = 600, target: int = 0) -> list[Document]:
@@ -98,7 +98,10 @@ def build_chunks(parsed: ParsedPdf, size: int = 600, target: int = 0) -> list[Do
             metadata["depends_on_parent_ids"] = json.dumps(parent.payload["dependency_object_ids"])
         if parent.kind == "figure":
             metadata["figure_id"] = parent.id
-            metadata["figure_description"] = parent.raw_content[:500]
+            metadata["figure_description"] = parent.payload.get("description_text", "")
+            # 通道字段属于完整图片对象，正文切片及定位映射仍按原有边界保存。
+            for field in ("native_text", "ocr_text", "caption_text", "description_text"):
+                metadata["image_" + field] = str(parent.payload.get(field, ""))
         if parsed.patent and parsed.patent.publication_number:
             metadata["publication_number"] = parsed.patent.publication_number.value
         output.append(Document(page_content=text, metadata={**metadata, **(extra or {})}))

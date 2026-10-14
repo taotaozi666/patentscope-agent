@@ -5,9 +5,11 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import streamlit as st
+from frontend.image_components import render_image, render_image_text_sources
 
 from app.schemas import ChunkRecord, DocumentRecord
 from app.storage import KnowledgeStore
+from frontend.source_components import render_download_button
 
 
 def _local_time(value: datetime) -> str:
@@ -18,7 +20,7 @@ def _open_document(document_id: str | None) -> None:
     st.session_state.knowledge_document_id = document_id
 
 
-def _render_documents(documents: list[DocumentRecord]) -> None:
+def _render_documents(store: KnowledgeStore, documents: list[DocumentRecord]) -> None:
     st.subheader("已导入文档")
     keyword = (
         st.text_input(
@@ -38,13 +40,17 @@ def _render_documents(documents: list[DocumentRecord]) -> None:
         return
     for doc in matches:
         with st.container(border=True):
-            st.button(
-                doc.source,
-                key=f"knowledge_open_{doc.id}",
-                on_click=_open_document,
-                args=(doc.id,),
-                width="stretch",
-            )
+            name_column, source_column = st.columns([3, 1])
+            with name_column:
+                st.button(
+                    doc.source,
+                    key=f"knowledge_open_{doc.id}",
+                    on_click=_open_document,
+                    args=(doc.id,),
+                    width="stretch",
+                )
+            with source_column:
+                render_download_button(store, doc, f"knowledge_download_{doc.id}")
             if doc.title:
                 st.text(doc.title)
             st.caption(
@@ -67,6 +73,7 @@ def _render_chunk_table(records: list[ChunkRecord]) -> None:
             # Keep type and OCR provenance visible before the chunk content.
             st.markdown(f"**{type_label}**" + ("　`OCR`" if is_ocr else ""))
             if chunk_type == "image":
+                render_image_text_sources(metadata)
                 image_id = metadata.get("image_id")
                 image = None
                 if image_id:
@@ -82,7 +89,7 @@ def _render_chunk_table(records: list[ChunkRecord]) -> None:
                 image_column, text_column = st.columns([1, 2], gap="medium")
                 with image_column:
                     if image:
-                        st.image(image, caption="PDF 图片区域", width=180)
+                        render_image(image, caption="PDF 图片区域", width=180)
                     else:
                         st.caption("图片裁图暂不可用")
                 with text_column:
@@ -183,4 +190,4 @@ def render_knowledge_page(store: KnowledgeStore) -> None:
         if selected_id:
             _open_document(None)
             st.info("该文档已不存在或已切换知识库，请重新选择文档。")
-        _render_documents(documents)
+        _render_documents(store, documents)

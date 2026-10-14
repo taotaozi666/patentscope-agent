@@ -99,7 +99,7 @@ class HistoryTests(unittest.TestCase):
                 self.assertIn("知识库问答助手", messages[-1]["content"])
                 self.assertEqual(messages[-1]["hits"], [])
                 self.assertFalse(messages[-2]["retrieval"])
-                self.assertFalse(any(expander.label == "查看检索来源" for expander in app.expander))
+                self.assertFalse(app.expander)
 
     def test_ui_greeting_with_documents_then_mixed_question_uses_rag(self):
         with TemporaryDirectory(ignore_cleanup_errors=True) as directory:

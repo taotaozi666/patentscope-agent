@@ -33,7 +33,7 @@ class KnowledgePageTests(unittest.TestCase):
     def test_navigation_full_text_and_pagination(self):
         app = self.app.run()
         self.assertFalse(app.exception)
-        self.assertEqual(len(app.button), 2)
+        self.assertEqual(len(app.button), 4)
         self.assertFalse(app.get("html"))
         app.button(key=f"knowledge_open_{self.document.id}").click().run()
         self.assertFalse(app.exception)
@@ -51,7 +51,7 @@ class KnowledgePageTests(unittest.TestCase):
         self.assertIn(self.text, [item.value for item in app.text])
         app.button[0].click().run()
         self.assertFalse(app.exception)
-        self.assertEqual(len(app.button), 2)
+        self.assertEqual(len(app.button), 4)
         self.assertFalse(app.get("html"))
 
     def test_missing_document_and_empty_library(self):
@@ -59,7 +59,7 @@ class KnowledgePageTests(unittest.TestCase):
         app = self.app.run()
         self.assertFalse(app.exception)
         self.assertIn("该文档已不存在", app.info[0].value)
-        self.assertEqual(len(app.button), 2)
+        self.assertEqual(len(app.button), 4)
         self.store.clear()
         app.run()
         self.assertFalse(app.exception)
