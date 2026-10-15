@@ -12,9 +12,48 @@ from app.schemas import Settings
 from app.storage import PdfRepository, QualityRepository
 from tests.test_pdf_pipeline import native_fixture
 from app.quality.service import inspect_saved_pdf
+from tests.pdf_regression.fixtures import make_pdf
 
 
 class QualityPageTests(unittest.TestCase):
+    def test_logical_table_cell_support_page_and_cell_review(self):
+        root = Path(__file__).resolve().parents[1] / ".documents" / "tests"
+        root.mkdir(parents=True, exist_ok=True)
+        with TemporaryDirectory(dir=root, ignore_cleanup_errors=True) as directory:
+            content = make_pdf("continued_table")
+            parsed = parse_pdf("continued.pdf", content, ocr_images=False)
+            chunks = build_chunks(parsed, size=80)
+            PdfRepository(directory).save(parsed, content, chunks)
+            run_id = chunks[0].metadata["pdf_parse_id"]
+            report = inspect_saved_pdf(directory, run_id)
+            table_id = parsed.logical_tables[0].id
+            fragment = parsed.table_fragments[1]
+            cell = next(c for c in fragment.cells if c.raw_text == "35.2")
+            app = AppTest.from_string("import streamlit as st\nfrom frontend.quality_page import render_quality_page\nrender_quality_page(st.session_state.settings)")
+            app.session_state["settings"] = Settings(api_key="", chat_model="", embedding_model="", pdf_directory=directory,
+                                                     chroma_directory=str(Path(directory) / "chroma"))
+            app.run()
+            self.assertFalse(app.exception)
+            app.selectbox(key=f"quality_table_{run_id}").select(table_id).run()
+            self.assertFalse(app.exception)
+            app.selectbox(key=f"quality_fragment_{run_id}_{table_id}").select(fragment.id).run()
+            app.selectbox(key=f"quality_cell_{run_id}_{fragment.id}").select(cell.id).run()
+            self.assertFalse(app.exception)
+            page_control = next(s for s in app.selectbox if s.label == "对照物理页码")
+            self.assertEqual(page_control.value, 2)
+            captions = [image.caption for item in app.image for image in item.proto.imgs]
+            self.assertIn("物理第 2 页；彩框对应所选单元格及支持证据。", captions)
+            self.assertTrue(any("红色＝所选值" in c.value for c in app.caption))
+            target = f"cell:{table_id}:{cell.id}"
+            app.selectbox(key=f"quality_target_{report.id}").select(target).run()
+            app.radio[0].set_value("有问题")
+            app.text_area[0].set_value("该数值需核对")
+            next(button for button in app.button if button.label == "保存复核").click().run()
+            self.assertFalse(app.exception)
+            review = next(r for r in QualityRepository(directory).reviews(report.id) if r.target == target)
+            self.assertEqual(review.decision, "problem")
+            self.assertEqual(QualityRepository(directory).latest(run_id).status, report.status)
+
     @unittest.skipUnless((Path(__file__).resolve().parents[1] / "data/CN112784004A.pdf").exists(), "真实专利样例未下载")
     def test_patent_navigation_and_clear_page_labels(self):
         root = Path(__file__).resolve().parents[1] / ".documents" / "tests"

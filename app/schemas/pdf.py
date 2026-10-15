@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING, Any, TypedDict
 
 if TYPE_CHECKING:
     from .patent import PatentStructure
+    from .table import LogicalTable, TableFragment
+    from .inspection import PageInspection
 
 
 class NativeTextSpan(TypedDict):
@@ -80,3 +82,7 @@ class ParsedPdf:
     warnings: list[str] = field(default_factory=list)
     patent: "PatentStructure | None" = None
     objects: list[SemanticObject] = field(default_factory=list)
+    table_schema_version: int = 1
+    table_fragments: list["TableFragment"] = field(default_factory=list)
+    logical_tables: list["LogicalTable"] = field(default_factory=list)
+    page_inspections: list["PageInspection"] = field(default_factory=list)

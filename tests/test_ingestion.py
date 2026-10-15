@@ -70,7 +70,7 @@ class IngestionTests(unittest.TestCase):
         job = self.submit()[0]
         cancelled = self.manager.cancel(job.id)
         self.assertEqual(cancelled.status, "cancelled")
-        with patch("app.ingestion.ingestion.RAGService") as factory:
+        with patch("app.ingestion.ingestion.DocumentImportService") as factory:
             self.manager._process(job.id)
             factory.assert_not_called()
         self.assertEqual(self.manager.get(job.id).status, "cancelled")
@@ -85,7 +85,7 @@ class IngestionTests(unittest.TestCase):
             self.assertEqual(self.manager.get(job.id).status, "processing")
             return 1
         service.add_file.side_effect = importing
-        with patch("app.ingestion.ingestion.RAGService", return_value=service):
+        with patch("app.ingestion.ingestion.DocumentImportService", return_value=service):
             self.manager._process(job.id)
         self.assertEqual(self.manager.get(job.id).status, "completed")
         self.assertEqual(self.manager.get(job.id).attempt, 1)
@@ -130,7 +130,7 @@ class IngestionTests(unittest.TestCase):
         service = MagicMock()
         service.add_file.side_effect = ValueError("simulated import failure")
         with self.assertLogs("app.ingestion", level="ERROR"), patch(
-            "app.ingestion.ingestion.RAGService", return_value=service
+            "app.ingestion.ingestion.DocumentImportService", return_value=service
         ) as factory:
             self.manager._process(job.id)
         captured = factory.call_args.kwargs["settings"]
@@ -143,7 +143,7 @@ class IngestionTests(unittest.TestCase):
         service.add_file.side_effect = None
         service.add_file.return_value = 2
         reopened = IngestionManager(self.manager.settings)
-        with patch("app.ingestion.ingestion.RAGService", return_value=service):
+        with patch("app.ingestion.ingestion.DocumentImportService", return_value=service):
             reopened._process(job.id)
         result = self.manager.get(job.id)
         self.assertEqual((result.status, result.attempt, result.chunk_count), ("completed", 2, 2))

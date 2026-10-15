@@ -17,6 +17,7 @@ from app.storage.pdf_repository import PdfRepository
 from app.storage.quality_repository import QualityRepository
 from app.storage.index_status import pdf_index_status
 from frontend.quality_layout import sync_quality_panel_height
+from frontend.table_review import render_table_review
 
 logger = logging.getLogger(__name__)
 STATUS = {"passed": "通过", "review": "待复核", "blocked": "阻断"}
@@ -119,12 +120,18 @@ def render_quality_page(settings: Settings) -> None:
     if selected_issue:
         st.write(selected_issue.message)
         st.caption(f"元素：{selected_issue.element_id or '—'} · 片段：{selected_issue.chunk_id or '—'}")
+    table_selection = render_table_review(run, report, run_id, reviews.values())
     default_page = selected_issue.page_no if selected_issue and selected_issue.page_no else 1
     if patent_spans:
         default_page = patent_spans[0]["page_no"]
         st.caption("已定位专利结构；清空结构选择后可按检查问题定位。")
+    if table_selection:
+        default_page = table_selection["page_no"]
+        st.caption("已定位表格；清空逻辑表选择后可按专利结构或检查问题定位。")
+    default_page = max(1, min(default_page, run["page_count"]))
+    table_key = f"_{table_selection['table_id']}_{table_selection['fragment_id']}_{table_selection['cell_id']}" if table_selection else ""
     page_no = st.selectbox("对照物理页码", list(range(1, run["page_count"] + 1)), index=default_page - 1,
-                           key=f"quality_page_{report.id}_{patent_target or issue_id or 'all'}")
+                           key=f"quality_page_{report.id}_{patent_target or issue_id or 'all'}{table_key}")
     if page_no is None:
         return
     elements = [item for item in run["elements"] if item["span"]["page_no"] == page_no]
@@ -140,8 +147,12 @@ def render_quality_page(settings: Settings) -> None:
                          for span in json.loads(row["metadata"]["pdf_source_spans"])]
         except (ValueError, TypeError):
             st.warning("问题片段的来源数据损坏，本页将展示原 PDF，不绘制高亮框。")
+    if selected_issue and selected_issue.source_spans:
+        highlight = selected_issue.source_spans
     if patent_spans:
         highlight = patent_spans
+    if table_selection:
+        highlight = table_selection["spans"]
     printed_labels = list(dict.fromkeys(item["payload"]["printed_page_label"] for item in elements if item.get("payload", {}).get("printed_page_label")))
     st.caption(f"物理第 {page_no} 页" + (" · 版面页码：" + "；".join(printed_labels) if printed_labels else ""))
     left, right = st.columns(2)
@@ -150,8 +161,9 @@ def render_quality_page(settings: Settings) -> None:
         st.write("**原 PDF**")
         try:
             original = repository.read_original(run["content_hash"])
-            render_image(render_source_page(original, page_no, highlight), caption=f"物理第 {page_no} 页；红框为所选问题的来源区域。")
-        except (FileNotFoundError, ValueError, KeyError, TypeError):
+            caption = f"物理第 {page_no} 页；彩框对应所选单元格及支持证据。" if table_selection and table_selection["cell_id"] else f"物理第 {page_no} 页；红框为所选问题的来源区域。"
+            render_image(render_source_page(original, page_no, highlight), caption=caption)
+        except (FileNotFoundError, ValueError, KeyError, TypeError, IndexError):
             st.warning("原文件缺失或来源区域无效，请重新导入。")
     with right:
         st.write("**提取结构与文字**")
@@ -175,6 +187,9 @@ def render_quality_page(settings: Settings) -> None:
                     st.text(element_text or ("图片区域：未提取到可显示文字" if item["kind"] == "image" else "（无文本）"))
                     if payload.get("ocr_text") and payload["ocr_text"] != element_text:
                         st.text_area("补充 OCR 文字", payload["ocr_text"], height=100, key=f"ocr_{run_id}_{item['id']}")
+                    if payload.get("text_conflicts"):
+                        st.warning("原生文字与 OCR 存在冲突，备选结果如下，需对照原页确认。")
+                        st.json(payload["text_conflicts"])
                     if payload.get("properties"):
                         with st.expander("元素属性"):
                             st.json(payload["properties"])
@@ -207,6 +222,10 @@ def render_quality_page(settings: Settings) -> None:
     targets = {"document": "整份文档", f"page:{page_no}": f"第 {page_no} 页"}
     if selected_issue:
         targets[f"issue:{selected_issue.id}"] = "当前检查问题"
+    if table_selection and table_selection["reviewable"]:
+        targets[f"table:{table_selection['table_id']}"] = "当前逻辑表（含所有物理片段）"
+        if table_selection["cell_reviewable"]:
+            targets[f"cell:{table_selection['table_id']}:{table_selection['cell_id']}"] = "当前单元格"
     target = st.selectbox("复核范围", list(targets), format_func=lambda value: targets[value], key=f"quality_target_{report.id}")
     if target is not None:
         previous = reviews.get(target)
@@ -222,6 +241,7 @@ def render_quality_page(settings: Settings) -> None:
     with st.expander("已保存的人工复核"):
         st.dataframe([asdict(review) for review in reviews.values()], hide_index=True)
     exported = {"document": {"source": run["source"], "content_hash": run["content_hash"], "title": run["title"]},
-                "patent": patent, "report": asdict(report), "reviews": [asdict(review) for review in reviews.values()]}
+                "patent": patent, "table_fragments": run.get("table_fragments", []), "logical_tables": run.get("logical_tables", []),
+                "report": asdict(report), "reviews": [asdict(review) for review in reviews.values()]}
     st.download_button("下载检查报告 JSON", json.dumps(exported, ensure_ascii=False, indent=2),
                        file_name=f"{run['source']}.quality.json", mime="application/json")

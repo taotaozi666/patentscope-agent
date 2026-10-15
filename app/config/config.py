@@ -1,6 +1,7 @@
 """统一读取项目配置，同名系统环境变量优先于项目根目录的 .env。"""
 
 import os
+import math
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -41,6 +42,17 @@ def get_settings(
 ) -> Settings:
     """每次调用重新读取配置，让后续页面操作使用最新的 .env。"""
     config = Config(env_file, environ)
+    retrieval_mode = config.get("RETRIEVAL_MODE", "hybrid").lower()
+    retrieval_candidates = int(config.get("RETRIEVAL_CANDIDATES", "30"))
+    retrieval_rrf_constant = int(config.get("RETRIEVAL_RRF_CONSTANT", "60"))
+    retrieval_vector_weight = float(config.get("RETRIEVAL_VECTOR_WEIGHT", "1"))
+    retrieval_keyword_weight = float(config.get("RETRIEVAL_KEYWORD_WEIGHT", "1"))
+    if retrieval_mode not in {"hybrid", "vector"}:
+        raise ValueError("RETRIEVAL_MODE 必须为 hybrid 或 vector")
+    if not 1 <= retrieval_candidates <= 1000 or not 1 <= retrieval_rrf_constant <= 10000:
+        raise ValueError("候选数必须介于 1 和 1000，RRF 常数必须介于 1 和 10000")
+    if any(not math.isfinite(weight) or weight <= 0 for weight in (retrieval_vector_weight, retrieval_keyword_weight)):
+        raise ValueError("检索权重必须为有限正数")
     log_level = config.get("LOG_LEVEL", "INFO").upper()
     if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR"}:
         raise ValueError("LOG_LEVEL 必须为 DEBUG、INFO、WARNING 或 ERROR")
@@ -51,6 +63,19 @@ def get_settings(
     pdf_image_ocr = config.get("PDF_IMAGE_OCR", "true").lower() in {"1", "true", "yes", "on"}
     pdf_ocr_language = config.get("PDF_OCR_LANGUAGE", "chi_sim+eng")
     pdf_ocr_dpi = int(config.get("PDF_OCR_DPI", "200"))
+    pdf_table_backend = config.get("PDF_TABLE_BACKEND", "native").lower()
+    pdf_table_mode = config.get("PDF_TABLE_MODE", "accurate").lower()
+    if pdf_table_backend not in {"native", "auto", "docling"}:
+        raise ValueError("PDF_TABLE_BACKEND 必须为 native、auto 或 docling")
+    if pdf_table_mode not in {"accurate", "fast"}:
+        raise ValueError("PDF_TABLE_MODE 必须为 accurate 或 fast")
+    pdf_table_models_directory = config.get("PDF_TABLE_MODELS_DIRECTORY")
+    if pdf_table_models_directory:
+        models_path = Path(pdf_table_models_directory).expanduser()
+        if not models_path.is_absolute():
+            models_path = Path(env_file).resolve().parent / models_path
+        pdf_table_models_directory = str(models_path.resolve())
+    pdf_table_fallback = config.get("PDF_TABLE_FALLBACK", "true").lower() in {"1", "true", "yes", "on"}
     if not 0 <= pdf_target_size <= chunk_size:
         raise ValueError("PDF_TARGET_SIZE 必须介于 0 和 CHUNK_SIZE 之间，0 表示自动使用上限的 80%")
     if pdf_context_mode not in {"rule", "model"}:
@@ -80,12 +105,19 @@ def get_settings(
         pdf_directory = Path(env_file).resolve().parent / pdf_directory
     return Settings(
         api_key=config.first("DASHSCOPE_API_KEY", "API_KEY"),
+        retrieval_mode=retrieval_mode, retrieval_candidates=retrieval_candidates,
+        retrieval_rrf_constant=retrieval_rrf_constant,
+        retrieval_vector_weight=retrieval_vector_weight, retrieval_keyword_weight=retrieval_keyword_weight,
         pdf_directory=str(pdf_directory.resolve()),
         pdf_target_size=pdf_target_size,
         pdf_context_mode=pdf_context_mode,
         pdf_image_ocr=pdf_image_ocr,
         pdf_ocr_language=pdf_ocr_language,
         pdf_ocr_dpi=pdf_ocr_dpi,
+        pdf_table_backend=pdf_table_backend,
+        pdf_table_mode=pdf_table_mode,
+        pdf_table_models_directory=pdf_table_models_directory,
+        pdf_table_fallback=pdf_table_fallback,
         chat_model=config.first("CHAT_MODEL", "MODEL", default="qwen3.8-max"),
         embedding_model=config.get("EMBEDDING_MODEL", "qwen3.7-text-embedding"),
         embedding_concurrency=embedding_concurrency,

@@ -4,20 +4,26 @@ from app.schemas import Settings
 from app.trace import print_step
 
 from .chunking import build_chunks
-from .parser import PARSER_VERSION, parse_pdf
+from .parser import PARSER_VERSION, PdfParseError, parse_pdf
 from app.storage.pdf_repository import PdfRepository
 from app.storage.quality_repository import QualityRepository
 from app.quality import check_pdf
 from .context import enhance_context
+from .profile import PdfProfile
 
 
 def prepare_pdf(source: str, content: bytes, settings: Settings):
-    parsed = parse_pdf(source, content, ocr_images=settings.pdf_image_ocr,
-                       ocr_language=settings.pdf_ocr_language, ocr_dpi=settings.pdf_ocr_dpi)
-    chunks = build_chunks(parsed, settings.chunk_size, settings.pdf_target_size)
-    for chunk in chunks:
-        chunk.metadata["pdf_context_mode"] = settings.pdf_context_mode
-        chunk.metadata["pdf_context_model"] = settings.chat_model if settings.pdf_context_mode == "model" else ""
+    profile = PdfProfile.from_settings(settings)
+    try:
+        parsed = parse_pdf(source, content, **profile.parser_arguments(settings.pdf_directory))
+    except PdfParseError as exc:
+        PdfRepository(settings.pdf_directory).save_failed_inspection(
+            source, content, exc.page_inspections, page_count=exc.page_count,
+            parser_version=exc.parser_version, error=str(exc),
+        )
+        raise
+    chunks = build_chunks(parsed, profile.chunk_size, profile.target_size)
+    profile.bind_chunks(chunks)
     enhance_context(parsed, chunks, settings)
     report = check_pdf(parsed, chunks, settings.chunk_size)
     for chunk in chunks:

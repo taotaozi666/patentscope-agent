@@ -2,12 +2,14 @@
 
 from datetime import UTC, datetime
 from hashlib import sha256
+from pathlib import Path
 from typing import Any, Protocol, cast
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import chromadb
 from chromadb.api.types import Include, Metadata, PyEmbeddings
 from chromadb.api.types import Where
+from chromadb.base_types import LiteralValue, OperatorExpression
 from chromadb.config import Settings as ChromaSettings
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
@@ -50,6 +52,9 @@ class KnowledgeStore(Protocol):
         self, vector: list[float], top_k: int,
         publication_numbers: list[str] | None = None,
     ) -> list[tuple[ChunkRecord, float]]: ...
+    def keyword_search(
+        self, question: str, top_k: int, publication_numbers: list[str] | None = None,
+    ) -> list[tuple[ChunkRecord, float]]: ...
     def clear(self) -> None: ...
 
 
@@ -76,6 +81,10 @@ class ChromaKnowledgeStore:
             collection_metadata={"hnsw:space": "cosine"},
         )
         self.collection = self.client.get_collection(self.collection_name)
+        from .lexical import LexicalIndex
+        lexical_path = Path(directory) / "lexical" / (sha256(self.collection_name.encode()).hexdigest() + ".sqlite3") if directory else None
+        self.lexical = LexicalIndex(lexical_path)
+        self.lexical.recover_missing_batches(self.collection.get(include=["metadatas"])["metadatas"] or [])
 
     def add_documents(
         self, documents: list[Document], embeddings: list[list[float]] | None = None
@@ -87,6 +96,7 @@ class ChromaKnowledgeStore:
         ids: list[str] = []
         document_ids: dict[str, str] = {}
         now = datetime.now(UTC).isoformat()
+        batch_id = uuid4().hex
         prepared = []
         for index, document in enumerate(documents, 1):
             source = str(document.metadata.get("source", "未知来源"))
@@ -117,6 +127,9 @@ class ChromaKnowledgeStore:
                 "created_at": now,
                 "chunk": document.metadata.get("chunk", index),
                 "chunk_total": len(documents),
+                "index_batch_id": batch_id,
+                "index_batch_total": len(documents),
+                "index_batch_position": index,
             }
             number = normalize_publication_number(str(metadata.get("publication_number", "")))
             if not number:
@@ -145,6 +158,7 @@ class ChromaKnowledgeStore:
         ]
         if any(stable_flags) and not all(stable_flags):
             raise ValueError("同一批次不能混合有版本指纹和无版本指纹的片段")
+        self.lexical.begin_batch(batch_id)
         try:
             batch_size = self.client.get_max_batch_size()
             has_stable_ids = all(stable_flags)
@@ -180,6 +194,7 @@ class ChromaKnowledgeStore:
                         documents=[doc.page_content for doc in batch],
                         metadatas=[doc.metadata for doc in batch],
                     )
+            self.lexical.commit_batch(batch_id)
             if has_stable_ids:
                 versions = {(str(doc.metadata["source"]), str(doc.metadata["content_hash"]),
                              str(doc.metadata["pipeline_fingerprint"])) for doc in prepared}
@@ -189,6 +204,8 @@ class ChromaKnowledgeStore:
             # 多批写入途中失败时，回滚本次导入已写入的片段。
             self.collection.delete(ids=ids)
             raise
+        finally:
+            self.lexical.invalidate()
         print_step("文档向量完成", 向量数量=len(ids), 状态="已写入 Chroma")
         return len(ids)
 
@@ -210,6 +227,8 @@ class ChromaKnowledgeStore:
             key = str(metadata.get("document_id", ""))
             grouped.setdefault(key, []).append(metadata)
         for records in grouped.values():
+            if len(self.lexical.active_metadata(records)) != len(records):
+                continue
             chunks = {
                 int(chunk_value)
                 for item in records
@@ -260,7 +279,11 @@ class ChromaKnowledgeStore:
             and metadata.get("pipeline_fingerprint") != pipeline_fingerprint
         ]
         if stale_ids:
-            self.collection.delete(ids=stale_ids)
+            self.lexical.invalidate()
+            try:
+                self.collection.delete(ids=stale_ids)
+            finally:
+                self.lexical.invalidate()
 
     def stats(self) -> StoreStats:
         documents = self.documents()
@@ -402,7 +425,10 @@ class ChromaKnowledgeStore:
             numbers = [number for number in numbers if number]
             if not numbers:
                 return []
-            where = {"publication_number": {"$in": numbers}}
+            # Chroma 的 $in 接受 list[LiteralValue]；list[str] 不能因不变性直接赋值。
+            values: list[LiteralValue] = [number for number in numbers]
+            publication_filter: OperatorExpression = {"$in": values}
+            where = {"publication_number": publication_filter}
             count = len(self.collection.get(where=where, include=[])["ids"])
         if not count or top_k <= 0:
             return []
@@ -413,40 +439,66 @@ class ChromaKnowledgeStore:
             top_k=top_k,
         )
         # cosine 返回距离，转换为 1-distance 后用于页面显示相似度。
-        result = self.collection.query(
-            query_embeddings=[vector],
-            n_results=min(top_k, count),
-            where=where,
-            include=["documents", "metadatas", "distances"],
-        )
-        if any(
-            result[key] is None
-            for key in ("documents", "metadatas", "distances")
-        ):
-            raise RuntimeError("Chroma 返回的检索数据不完整")
-        assert result["documents"] is not None
-        assert result["metadatas"] is not None
-        assert result["distances"] is not None
-        records = self._records(
-            {
-                "ids": result["ids"][0],
-                "documents": result["documents"][0],
-                "metadatas": result["metadatas"][0],
-            }
-        )
-        hits = [
-            (record, max(-1.0, min(1.0, 1.0 - float(distance))))
-            for record, distance in zip(records, result["distances"][0])
-            if 1.0 - float(distance) > 1e-7
-        ]
+        query_limit = min(top_k, count)
+        while True:
+            result = self.collection.query(
+                query_embeddings=[vector],
+                n_results=query_limit,
+                where=where,
+                include=["documents", "metadatas", "distances"],
+            )
+            if any(
+                result[key] is None
+                for key in ("documents", "metadatas", "distances")
+            ):
+                raise RuntimeError("Chroma 返回的检索数据不完整")
+            assert result["documents"] is not None
+            assert result["metadatas"] is not None
+            assert result["distances"] is not None
+            records = self._records(
+                {
+                    "ids": result["ids"][0],
+                    "documents": result["documents"][0],
+                    "metadatas": result["metadatas"][0],
+                }
+            )
+            active_ids = {record.id for record in self.lexical.active_records(records)}
+            hits = [
+                (record, max(-1.0, min(1.0, 1.0 - float(distance))))
+                for record, distance in zip(records, result["distances"][0])
+                if record.id in active_ids and 1.0 - float(distance) > 1e-7
+            ]
+            if len(hits) >= top_k or query_limit >= count or len(active_ids) == len(records):
+                hits = hits[:top_k]
+                break
+            query_limit = min(count, query_limit * 2)
         print_step("Chroma 检索完成", 距离类型="cosine", 返回片段数=len(hits))
         return hits
 
+    def keyword_search(self, question: str, top_k: int,
+                       publication_numbers: list[str] | None = None) -> list[tuple[ChunkRecord, float]]:
+        from .lexical import signature
+        if not question.strip() or top_k <= 0:
+            return []
+        self.lexical.synchronize(lambda: self.lexical.active_records(self._records(self.collection.get(include=["documents", "metadatas"]))))
+        matches = self.lexical.search(question, top_k, publication_numbers)
+        if not matches:
+            return []
+        # Hydrate from the live authoritative collection: deleted or changed rows never become evidence.
+        records = self._records(self.collection.get(ids=[row[0] for row in matches], include=["documents", "metadatas"]))
+        by_id = {record.id: record for record in self.lexical.active_records(records)}
+        return [(by_id[identifier], -score) for identifier, digest, score in matches
+                if identifier in by_id and signature(by_id[identifier]) == digest]
+
     def clear(self) -> None:
-        # 保留集合配置及维度，只删除当前集合中的记录。
-        ids = self.collection.get(include=[])["ids"]
-        if ids:
-            self.collection.delete(ids=ids)
+        # Keep collection dimensions; invalidate the derived index even if a deletion fails.
+        self.lexical.invalidate()
+        try:
+            ids = self.collection.get(include=[])["ids"]
+            if ids:
+                self.collection.delete(ids=ids)
+        finally:
+            self.lexical.invalidate()
 
 
 def create_store(

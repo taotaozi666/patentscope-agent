@@ -1,0 +1,2061 @@
+{
+  "schema_version": 1,
+  "coordinate_system": "normalized_display_page",
+  "page_size_points": [
+    600,
+    800
+  ],
+  "annotation_source": "Manually specified synthetic cell geometry and content; independent of parser output.",
+  "cases": [
+    {
+      "id": "native_grid",
+      "description": "原生中文表头、数字零和空白单元格",
+      "page_sources": [
+        "native"
+      ],
+      "paragraphs": [
+        {
+          "page_no": 1,
+          "text": "Native paragraph: compare the experimental samples."
+        }
+      ],
+      "fragments": [
+        {
+          "id": "t1",
+          "page_no": 1,
+          "bbox": [
+            0.1,
+            0.2,
+            0.9,
+            0.35
+          ],
+          "row_count": 3,
+          "column_count": 3,
+          "header_rows": [
+            0
+          ],
+          "cells": [
+            {
+              "id": "r0c0",
+              "row": 0,
+              "column": 0,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "实施例",
+              "bbox": [
+                0.1,
+                0.2,
+                0.36666666666666664,
+                0.25
+              ]
+            },
+            {
+              "id": "r0c1",
+              "row": 0,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "拉伸强度 MPa",
+              "bbox": [
+                0.36666666666666664,
+                0.2,
+                0.6333333333333333,
+                0.25
+              ]
+            },
+            {
+              "id": "r0c2",
+              "row": 0,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Count",
+              "bbox": [
+                0.6333333333333333,
+                0.2,
+                0.9,
+                0.25
+              ]
+            },
+            {
+              "id": "r1c0",
+              "row": 1,
+              "column": 0,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Ex1",
+              "bbox": [
+                0.1,
+                0.25,
+                0.36666666666666664,
+                0.3
+              ]
+            },
+            {
+              "id": "r1c1",
+              "row": 1,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "35.2",
+              "bbox": [
+                0.36666666666666664,
+                0.25,
+                0.6333333333333333,
+                0.3
+              ]
+            },
+            {
+              "id": "r1c2",
+              "row": 1,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "0",
+              "bbox": [
+                0.6333333333333333,
+                0.25,
+                0.9,
+                0.3
+              ]
+            },
+            {
+              "id": "r2c0",
+              "row": 2,
+              "column": 0,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Ex2",
+              "bbox": [
+                0.1,
+                0.3,
+                0.36666666666666664,
+                0.35
+              ]
+            },
+            {
+              "id": "r2c1",
+              "row": 2,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "40.8",
+              "bbox": [
+                0.36666666666666664,
+                0.3,
+                0.6333333333333333,
+                0.35
+              ]
+            },
+            {
+              "id": "r2c2",
+              "row": 2,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "",
+              "bbox": [
+                0.6333333333333333,
+                0.3,
+                0.9,
+                0.35
+              ]
+            }
+          ]
+        }
+      ],
+      "logical_tables": [
+        [
+          "t1"
+        ]
+      ],
+      "numeric_facts": [
+        {
+          "fragment_id": "t1",
+          "cell_id": "r1c1",
+          "raw_value": "35.2",
+          "row_header_cell_ids": [
+            "r1c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c1"
+          ]
+        },
+        {
+          "fragment_id": "t1",
+          "cell_id": "r1c2",
+          "raw_value": "0",
+          "row_header_cell_ids": [
+            "r1c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c2"
+          ]
+        },
+        {
+          "fragment_id": "t1",
+          "cell_id": "r2c1",
+          "raw_value": "40.8",
+          "row_header_cell_ids": [
+            "r2c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c1"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "hybrid_page",
+      "description": "原生正文与扫描表格同页",
+      "page_sources": [
+        "hybrid"
+      ],
+      "paragraphs": [
+        {
+          "page_no": 1,
+          "text": "Native paragraph: compare the experimental samples."
+        }
+      ],
+      "fragments": [
+        {
+          "id": "t1",
+          "page_no": 1,
+          "bbox": [
+            0.1,
+            0.2,
+            0.9,
+            0.35
+          ],
+          "row_count": 3,
+          "column_count": 3,
+          "header_rows": [
+            0
+          ],
+          "cells": [
+            {
+              "id": "r0c0",
+              "row": 0,
+              "column": 0,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "实施例",
+              "bbox": [
+                0.1,
+                0.2,
+                0.36666666666666664,
+                0.25
+              ]
+            },
+            {
+              "id": "r0c1",
+              "row": 0,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "拉伸强度 MPa",
+              "bbox": [
+                0.36666666666666664,
+                0.2,
+                0.6333333333333333,
+                0.25
+              ]
+            },
+            {
+              "id": "r0c2",
+              "row": 0,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Count",
+              "bbox": [
+                0.6333333333333333,
+                0.2,
+                0.9,
+                0.25
+              ]
+            },
+            {
+              "id": "r1c0",
+              "row": 1,
+              "column": 0,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Ex1",
+              "bbox": [
+                0.1,
+                0.25,
+                0.36666666666666664,
+                0.3
+              ]
+            },
+            {
+              "id": "r1c1",
+              "row": 1,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "35.2",
+              "bbox": [
+                0.36666666666666664,
+                0.25,
+                0.6333333333333333,
+                0.3
+              ]
+            },
+            {
+              "id": "r1c2",
+              "row": 1,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "0",
+              "bbox": [
+                0.6333333333333333,
+                0.25,
+                0.9,
+                0.3
+              ]
+            },
+            {
+              "id": "r2c0",
+              "row": 2,
+              "column": 0,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Ex2",
+              "bbox": [
+                0.1,
+                0.3,
+                0.36666666666666664,
+                0.35
+              ]
+            },
+            {
+              "id": "r2c1",
+              "row": 2,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "40.8",
+              "bbox": [
+                0.36666666666666664,
+                0.3,
+                0.6333333333333333,
+                0.35
+              ]
+            },
+            {
+              "id": "r2c2",
+              "row": 2,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "",
+              "bbox": [
+                0.6333333333333333,
+                0.3,
+                0.9,
+                0.35
+              ]
+            }
+          ]
+        }
+      ],
+      "logical_tables": [
+        [
+          "t1"
+        ]
+      ],
+      "numeric_facts": [
+        {
+          "fragment_id": "t1",
+          "cell_id": "r1c1",
+          "raw_value": "35.2",
+          "row_header_cell_ids": [
+            "r1c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c1"
+          ]
+        },
+        {
+          "fragment_id": "t1",
+          "cell_id": "r1c2",
+          "raw_value": "0",
+          "row_header_cell_ids": [
+            "r1c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c2"
+          ]
+        },
+        {
+          "fragment_id": "t1",
+          "cell_id": "r2c1",
+          "raw_value": "40.8",
+          "row_header_cell_ids": [
+            "r2c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c1"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "scanned_table",
+      "description": "无文字层的扫描表格",
+      "page_sources": [
+        "scanned"
+      ],
+      "paragraphs": [],
+      "fragments": [
+        {
+          "id": "t1",
+          "page_no": 1,
+          "bbox": [
+            0.1,
+            0.2,
+            0.9,
+            0.35
+          ],
+          "row_count": 3,
+          "column_count": 3,
+          "header_rows": [
+            0
+          ],
+          "cells": [
+            {
+              "id": "r0c0",
+              "row": 0,
+              "column": 0,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "实施例",
+              "bbox": [
+                0.1,
+                0.2,
+                0.36666666666666664,
+                0.25
+              ]
+            },
+            {
+              "id": "r0c1",
+              "row": 0,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "拉伸强度 MPa",
+              "bbox": [
+                0.36666666666666664,
+                0.2,
+                0.6333333333333333,
+                0.25
+              ]
+            },
+            {
+              "id": "r0c2",
+              "row": 0,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Count",
+              "bbox": [
+                0.6333333333333333,
+                0.2,
+                0.9,
+                0.25
+              ]
+            },
+            {
+              "id": "r1c0",
+              "row": 1,
+              "column": 0,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Ex1",
+              "bbox": [
+                0.1,
+                0.25,
+                0.36666666666666664,
+                0.3
+              ]
+            },
+            {
+              "id": "r1c1",
+              "row": 1,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "35.2",
+              "bbox": [
+                0.36666666666666664,
+                0.25,
+                0.6333333333333333,
+                0.3
+              ]
+            },
+            {
+              "id": "r1c2",
+              "row": 1,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "0",
+              "bbox": [
+                0.6333333333333333,
+                0.25,
+                0.9,
+                0.3
+              ]
+            },
+            {
+              "id": "r2c0",
+              "row": 2,
+              "column": 0,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Ex2",
+              "bbox": [
+                0.1,
+                0.3,
+                0.36666666666666664,
+                0.35
+              ]
+            },
+            {
+              "id": "r2c1",
+              "row": 2,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "40.8",
+              "bbox": [
+                0.36666666666666664,
+                0.3,
+                0.6333333333333333,
+                0.35
+              ]
+            },
+            {
+              "id": "r2c2",
+              "row": 2,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "",
+              "bbox": [
+                0.6333333333333333,
+                0.3,
+                0.9,
+                0.35
+              ]
+            }
+          ]
+        }
+      ],
+      "logical_tables": [
+        [
+          "t1"
+        ]
+      ],
+      "numeric_facts": [
+        {
+          "fragment_id": "t1",
+          "cell_id": "r1c1",
+          "raw_value": "35.2",
+          "row_header_cell_ids": [
+            "r1c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c1"
+          ]
+        },
+        {
+          "fragment_id": "t1",
+          "cell_id": "r1c2",
+          "raw_value": "0",
+          "row_header_cell_ids": [
+            "r1c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c2"
+          ]
+        },
+        {
+          "fragment_id": "t1",
+          "cell_id": "r2c1",
+          "raw_value": "40.8",
+          "row_header_cell_ids": [
+            "r2c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c1"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "multi_header",
+      "description": "两级表头及跨行跨列",
+      "page_sources": [
+        "native"
+      ],
+      "paragraphs": [
+        {
+          "page_no": 1,
+          "text": "Native paragraph: compare the experimental samples."
+        }
+      ],
+      "fragments": [
+        {
+          "id": "t1",
+          "page_no": 1,
+          "bbox": [
+            0.1,
+            0.2,
+            0.9,
+            0.4
+          ],
+          "row_count": 4,
+          "column_count": 4,
+          "header_rows": [
+            0,
+            1
+          ],
+          "cells": [
+            {
+              "id": "r0c0",
+              "row": 0,
+              "column": 0,
+              "row_span": 2,
+              "col_span": 1,
+              "raw_text": "Sample",
+              "bbox": [
+                0.1,
+                0.2,
+                0.3,
+                0.3
+              ]
+            },
+            {
+              "id": "r0c1",
+              "row": 0,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 2,
+              "raw_text": "Properties",
+              "bbox": [
+                0.3,
+                0.2,
+                0.7,
+                0.25
+              ]
+            },
+            {
+              "id": "r0c3",
+              "row": 0,
+              "column": 3,
+              "row_span": 2,
+              "col_span": 1,
+              "raw_text": "Note",
+              "bbox": [
+                0.7,
+                0.2,
+                0.9,
+                0.3
+              ]
+            },
+            {
+              "id": "r1c1",
+              "row": 1,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Strength MPa",
+              "bbox": [
+                0.3,
+                0.25,
+                0.5,
+                0.3
+              ]
+            },
+            {
+              "id": "r1c2",
+              "row": 1,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Elongation %",
+              "bbox": [
+                0.5,
+                0.25,
+                0.7,
+                0.3
+              ]
+            },
+            {
+              "id": "r2c0",
+              "row": 2,
+              "column": 0,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Ex1",
+              "bbox": [
+                0.1,
+                0.3,
+                0.3,
+                0.35
+              ]
+            },
+            {
+              "id": "r2c1",
+              "row": 2,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "35.2",
+              "bbox": [
+                0.3,
+                0.3,
+                0.5,
+                0.35
+              ]
+            },
+            {
+              "id": "r2c2",
+              "row": 2,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "120",
+              "bbox": [
+                0.5,
+                0.3,
+                0.7,
+                0.35
+              ]
+            },
+            {
+              "id": "r2c3",
+              "row": 2,
+              "column": 3,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "pass",
+              "bbox": [
+                0.7,
+                0.3,
+                0.9,
+                0.35
+              ]
+            },
+            {
+              "id": "r3c0",
+              "row": 3,
+              "column": 0,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Ex2",
+              "bbox": [
+                0.1,
+                0.35,
+                0.3,
+                0.4
+              ]
+            },
+            {
+              "id": "r3c1",
+              "row": 3,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "40.8",
+              "bbox": [
+                0.3,
+                0.35,
+                0.5,
+                0.4
+              ]
+            },
+            {
+              "id": "r3c2",
+              "row": 3,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "140",
+              "bbox": [
+                0.5,
+                0.35,
+                0.7,
+                0.4
+              ]
+            },
+            {
+              "id": "r3c3",
+              "row": 3,
+              "column": 3,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "-",
+              "bbox": [
+                0.7,
+                0.35,
+                0.9,
+                0.4
+              ]
+            }
+          ]
+        }
+      ],
+      "logical_tables": [
+        [
+          "t1"
+        ]
+      ],
+      "numeric_facts": [
+        {
+          "fragment_id": "t1",
+          "cell_id": "r2c1",
+          "raw_value": "35.2",
+          "row_header_cell_ids": [
+            "r2c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c1",
+            "r1c1"
+          ]
+        },
+        {
+          "fragment_id": "t1",
+          "cell_id": "r2c2",
+          "raw_value": "120",
+          "row_header_cell_ids": [
+            "r2c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c1",
+            "r1c2"
+          ]
+        },
+        {
+          "fragment_id": "t1",
+          "cell_id": "r3c1",
+          "raw_value": "40.8",
+          "row_header_cell_ids": [
+            "r3c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c1",
+            "r1c1"
+          ]
+        },
+        {
+          "fragment_id": "t1",
+          "cell_id": "r3c2",
+          "raw_value": "140",
+          "row_header_cell_ids": [
+            "r3c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c1",
+            "r1c2"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "merged_cells",
+      "description": "数据区行标识跨两行",
+      "page_sources": [
+        "native"
+      ],
+      "paragraphs": [
+        {
+          "page_no": 1,
+          "text": "Native paragraph: compare the experimental samples."
+        }
+      ],
+      "fragments": [
+        {
+          "id": "t1",
+          "page_no": 1,
+          "bbox": [
+            0.1,
+            0.2,
+            0.9,
+            0.35
+          ],
+          "row_count": 3,
+          "column_count": 3,
+          "header_rows": [
+            0
+          ],
+          "cells": [
+            {
+              "id": "r0c0",
+              "row": 0,
+              "column": 0,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Sample",
+              "bbox": [
+                0.1,
+                0.2,
+                0.36666666666666664,
+                0.25
+              ]
+            },
+            {
+              "id": "r0c1",
+              "row": 0,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Strength MPa",
+              "bbox": [
+                0.36666666666666664,
+                0.2,
+                0.6333333333333333,
+                0.25
+              ]
+            },
+            {
+              "id": "r0c2",
+              "row": 0,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Elongation %",
+              "bbox": [
+                0.6333333333333333,
+                0.2,
+                0.9,
+                0.25
+              ]
+            },
+            {
+              "id": "r1c0",
+              "row": 1,
+              "column": 0,
+              "row_span": 2,
+              "col_span": 1,
+              "raw_text": "Ex1",
+              "bbox": [
+                0.1,
+                0.25,
+                0.36666666666666664,
+                0.35
+              ]
+            },
+            {
+              "id": "r1c1",
+              "row": 1,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "35.2",
+              "bbox": [
+                0.36666666666666664,
+                0.25,
+                0.6333333333333333,
+                0.3
+              ]
+            },
+            {
+              "id": "r1c2",
+              "row": 1,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "120",
+              "bbox": [
+                0.6333333333333333,
+                0.25,
+                0.9,
+                0.3
+              ]
+            },
+            {
+              "id": "r2c1",
+              "row": 2,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "40.8",
+              "bbox": [
+                0.36666666666666664,
+                0.3,
+                0.6333333333333333,
+                0.35
+              ]
+            },
+            {
+              "id": "r2c2",
+              "row": 2,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "140",
+              "bbox": [
+                0.6333333333333333,
+                0.3,
+                0.9,
+                0.35
+              ]
+            }
+          ]
+        }
+      ],
+      "logical_tables": [
+        [
+          "t1"
+        ]
+      ],
+      "numeric_facts": [
+        {
+          "fragment_id": "t1",
+          "cell_id": "r1c1",
+          "raw_value": "35.2",
+          "row_header_cell_ids": [
+            "r1c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c1"
+          ]
+        },
+        {
+          "fragment_id": "t1",
+          "cell_id": "r1c2",
+          "raw_value": "120",
+          "row_header_cell_ids": [
+            "r1c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c2"
+          ]
+        },
+        {
+          "fragment_id": "t1",
+          "cell_id": "r2c1",
+          "raw_value": "40.8",
+          "row_header_cell_ids": [
+            "r1c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c1"
+          ]
+        },
+        {
+          "fragment_id": "t1",
+          "cell_id": "r2c2",
+          "raw_value": "140",
+          "row_header_cell_ids": [
+            "r1c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c2"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "borderless",
+      "description": "按文字对齐形成的无框线表",
+      "page_sources": [
+        "native"
+      ],
+      "paragraphs": [
+        {
+          "page_no": 1,
+          "text": "Native paragraph: compare the experimental samples."
+        }
+      ],
+      "fragments": [
+        {
+          "id": "t1",
+          "page_no": 1,
+          "bbox": [
+            0.1,
+            0.2,
+            0.9,
+            0.35
+          ],
+          "row_count": 3,
+          "column_count": 3,
+          "header_rows": [
+            0
+          ],
+          "cells": [
+            {
+              "id": "r0c0",
+              "row": 0,
+              "column": 0,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "实施例",
+              "bbox": [
+                0.1,
+                0.2,
+                0.36666666666666664,
+                0.25
+              ]
+            },
+            {
+              "id": "r0c1",
+              "row": 0,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "拉伸强度 MPa",
+              "bbox": [
+                0.36666666666666664,
+                0.2,
+                0.6333333333333333,
+                0.25
+              ]
+            },
+            {
+              "id": "r0c2",
+              "row": 0,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Count",
+              "bbox": [
+                0.6333333333333333,
+                0.2,
+                0.9,
+                0.25
+              ]
+            },
+            {
+              "id": "r1c0",
+              "row": 1,
+              "column": 0,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Ex1",
+              "bbox": [
+                0.1,
+                0.25,
+                0.36666666666666664,
+                0.3
+              ]
+            },
+            {
+              "id": "r1c1",
+              "row": 1,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "35.2",
+              "bbox": [
+                0.36666666666666664,
+                0.25,
+                0.6333333333333333,
+                0.3
+              ]
+            },
+            {
+              "id": "r1c2",
+              "row": 1,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "0",
+              "bbox": [
+                0.6333333333333333,
+                0.25,
+                0.9,
+                0.3
+              ]
+            },
+            {
+              "id": "r2c0",
+              "row": 2,
+              "column": 0,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Ex2",
+              "bbox": [
+                0.1,
+                0.3,
+                0.36666666666666664,
+                0.35
+              ]
+            },
+            {
+              "id": "r2c1",
+              "row": 2,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "40.8",
+              "bbox": [
+                0.36666666666666664,
+                0.3,
+                0.6333333333333333,
+                0.35
+              ]
+            },
+            {
+              "id": "r2c2",
+              "row": 2,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "",
+              "bbox": [
+                0.6333333333333333,
+                0.3,
+                0.9,
+                0.35
+              ]
+            }
+          ]
+        }
+      ],
+      "logical_tables": [
+        [
+          "t1"
+        ]
+      ],
+      "numeric_facts": [
+        {
+          "fragment_id": "t1",
+          "cell_id": "r1c1",
+          "raw_value": "35.2",
+          "row_header_cell_ids": [
+            "r1c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c1"
+          ]
+        },
+        {
+          "fragment_id": "t1",
+          "cell_id": "r1c2",
+          "raw_value": "0",
+          "row_header_cell_ids": [
+            "r1c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c2"
+          ]
+        },
+        {
+          "fragment_id": "t1",
+          "cell_id": "r2c1",
+          "raw_value": "40.8",
+          "row_header_cell_ids": [
+            "r2c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c1"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "continued_table",
+      "description": "重复表头的跨页续表",
+      "page_sources": [
+        "native",
+        "native"
+      ],
+      "paragraphs": [
+        {
+          "page_no": 1,
+          "text": "Native paragraph: compare the experimental samples."
+        }
+      ],
+      "fragments": [
+        {
+          "id": "t1p1",
+          "page_no": 1,
+          "bbox": [
+            0.1,
+            0.2,
+            0.9,
+            0.35
+          ],
+          "row_count": 3,
+          "column_count": 3,
+          "header_rows": [
+            0
+          ],
+          "cells": [
+            {
+              "id": "r0c0",
+              "row": 0,
+              "column": 0,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Sample",
+              "bbox": [
+                0.1,
+                0.2,
+                0.36666666666666664,
+                0.25
+              ]
+            },
+            {
+              "id": "r0c1",
+              "row": 0,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Strength MPa",
+              "bbox": [
+                0.36666666666666664,
+                0.2,
+                0.6333333333333333,
+                0.25
+              ]
+            },
+            {
+              "id": "r0c2",
+              "row": 0,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Elongation %",
+              "bbox": [
+                0.6333333333333333,
+                0.2,
+                0.9,
+                0.25
+              ]
+            },
+            {
+              "id": "r1c0",
+              "row": 1,
+              "column": 0,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Ex1",
+              "bbox": [
+                0.1,
+                0.25,
+                0.36666666666666664,
+                0.3
+              ]
+            },
+            {
+              "id": "r1c1",
+              "row": 1,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "35.2",
+              "bbox": [
+                0.36666666666666664,
+                0.25,
+                0.6333333333333333,
+                0.3
+              ]
+            },
+            {
+              "id": "r1c2",
+              "row": 1,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "120",
+              "bbox": [
+                0.6333333333333333,
+                0.25,
+                0.9,
+                0.3
+              ]
+            },
+            {
+              "id": "r2c0",
+              "row": 2,
+              "column": 0,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Ex2",
+              "bbox": [
+                0.1,
+                0.3,
+                0.36666666666666664,
+                0.35
+              ]
+            },
+            {
+              "id": "r2c1",
+              "row": 2,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "40.8",
+              "bbox": [
+                0.36666666666666664,
+                0.3,
+                0.6333333333333333,
+                0.35
+              ]
+            },
+            {
+              "id": "r2c2",
+              "row": 2,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "140",
+              "bbox": [
+                0.6333333333333333,
+                0.3,
+                0.9,
+                0.35
+              ]
+            }
+          ]
+        },
+        {
+          "id": "t1p2",
+          "page_no": 2,
+          "bbox": [
+            0.1,
+            0.2,
+            0.9,
+            0.35
+          ],
+          "row_count": 3,
+          "column_count": 3,
+          "header_rows": [
+            0
+          ],
+          "cells": [
+            {
+              "id": "r0c0",
+              "row": 0,
+              "column": 0,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Sample",
+              "bbox": [
+                0.1,
+                0.2,
+                0.36666666666666664,
+                0.25
+              ]
+            },
+            {
+              "id": "r0c1",
+              "row": 0,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Strength MPa",
+              "bbox": [
+                0.36666666666666664,
+                0.2,
+                0.6333333333333333,
+                0.25
+              ]
+            },
+            {
+              "id": "r0c2",
+              "row": 0,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Elongation %",
+              "bbox": [
+                0.6333333333333333,
+                0.2,
+                0.9,
+                0.25
+              ]
+            },
+            {
+              "id": "r1c0",
+              "row": 1,
+              "column": 0,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Ex3",
+              "bbox": [
+                0.1,
+                0.25,
+                0.36666666666666664,
+                0.3
+              ]
+            },
+            {
+              "id": "r1c1",
+              "row": 1,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "35.2",
+              "bbox": [
+                0.36666666666666664,
+                0.25,
+                0.6333333333333333,
+                0.3
+              ]
+            },
+            {
+              "id": "r1c2",
+              "row": 1,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "120",
+              "bbox": [
+                0.6333333333333333,
+                0.25,
+                0.9,
+                0.3
+              ]
+            },
+            {
+              "id": "r2c0",
+              "row": 2,
+              "column": 0,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Ex4",
+              "bbox": [
+                0.1,
+                0.3,
+                0.36666666666666664,
+                0.35
+              ]
+            },
+            {
+              "id": "r2c1",
+              "row": 2,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "40.8",
+              "bbox": [
+                0.36666666666666664,
+                0.3,
+                0.6333333333333333,
+                0.35
+              ]
+            },
+            {
+              "id": "r2c2",
+              "row": 2,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "140",
+              "bbox": [
+                0.6333333333333333,
+                0.3,
+                0.9,
+                0.35
+              ]
+            }
+          ]
+        }
+      ],
+      "logical_tables": [
+        [
+          "t1p1",
+          "t1p2"
+        ]
+      ],
+      "numeric_facts": [
+        {
+          "fragment_id": "t1p1",
+          "cell_id": "r1c1",
+          "raw_value": "35.2",
+          "row_header_cell_ids": [
+            "r1c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c1"
+          ]
+        },
+        {
+          "fragment_id": "t1p1",
+          "cell_id": "r1c2",
+          "raw_value": "120",
+          "row_header_cell_ids": [
+            "r1c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c2"
+          ]
+        },
+        {
+          "fragment_id": "t1p1",
+          "cell_id": "r2c1",
+          "raw_value": "40.8",
+          "row_header_cell_ids": [
+            "r2c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c1"
+          ]
+        },
+        {
+          "fragment_id": "t1p1",
+          "cell_id": "r2c2",
+          "raw_value": "140",
+          "row_header_cell_ids": [
+            "r2c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c2"
+          ]
+        },
+        {
+          "fragment_id": "t1p2",
+          "cell_id": "r1c1",
+          "raw_value": "35.2",
+          "row_header_cell_ids": [
+            "r1c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c1"
+          ]
+        },
+        {
+          "fragment_id": "t1p2",
+          "cell_id": "r1c2",
+          "raw_value": "120",
+          "row_header_cell_ids": [
+            "r1c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c2"
+          ]
+        },
+        {
+          "fragment_id": "t1p2",
+          "cell_id": "r2c1",
+          "raw_value": "40.8",
+          "row_header_cell_ids": [
+            "r2c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c1"
+          ]
+        },
+        {
+          "fragment_id": "t1p2",
+          "cell_id": "r2c2",
+          "raw_value": "140",
+          "row_header_cell_ids": [
+            "r2c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c2"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "distinct_tables",
+      "description": "列数相同但表编号和单位不同，禁止续接",
+      "page_sources": [
+        "native",
+        "native"
+      ],
+      "paragraphs": [
+        {
+          "page_no": 1,
+          "text": "Native paragraph: compare the experimental samples."
+        }
+      ],
+      "fragments": [
+        {
+          "id": "t1p1",
+          "page_no": 1,
+          "bbox": [
+            0.1,
+            0.2,
+            0.9,
+            0.35
+          ],
+          "row_count": 3,
+          "column_count": 3,
+          "header_rows": [
+            0
+          ],
+          "cells": [
+            {
+              "id": "r0c0",
+              "row": 0,
+              "column": 0,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Sample",
+              "bbox": [
+                0.1,
+                0.2,
+                0.36666666666666664,
+                0.25
+              ]
+            },
+            {
+              "id": "r0c1",
+              "row": 0,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Strength MPa",
+              "bbox": [
+                0.36666666666666664,
+                0.2,
+                0.6333333333333333,
+                0.25
+              ]
+            },
+            {
+              "id": "r0c2",
+              "row": 0,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Elongation %",
+              "bbox": [
+                0.6333333333333333,
+                0.2,
+                0.9,
+                0.25
+              ]
+            },
+            {
+              "id": "r1c0",
+              "row": 1,
+              "column": 0,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Ex1",
+              "bbox": [
+                0.1,
+                0.25,
+                0.36666666666666664,
+                0.3
+              ]
+            },
+            {
+              "id": "r1c1",
+              "row": 1,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "35.2",
+              "bbox": [
+                0.36666666666666664,
+                0.25,
+                0.6333333333333333,
+                0.3
+              ]
+            },
+            {
+              "id": "r1c2",
+              "row": 1,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "120",
+              "bbox": [
+                0.6333333333333333,
+                0.25,
+                0.9,
+                0.3
+              ]
+            },
+            {
+              "id": "r2c0",
+              "row": 2,
+              "column": 0,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Ex2",
+              "bbox": [
+                0.1,
+                0.3,
+                0.36666666666666664,
+                0.35
+              ]
+            },
+            {
+              "id": "r2c1",
+              "row": 2,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "40.8",
+              "bbox": [
+                0.36666666666666664,
+                0.3,
+                0.6333333333333333,
+                0.35
+              ]
+            },
+            {
+              "id": "r2c2",
+              "row": 2,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "140",
+              "bbox": [
+                0.6333333333333333,
+                0.3,
+                0.9,
+                0.35
+              ]
+            }
+          ]
+        },
+        {
+          "id": "t1p2",
+          "page_no": 2,
+          "bbox": [
+            0.1,
+            0.2,
+            0.9,
+            0.35
+          ],
+          "row_count": 3,
+          "column_count": 3,
+          "header_rows": [
+            0
+          ],
+          "cells": [
+            {
+              "id": "r0c0",
+              "row": 0,
+              "column": 0,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Sample",
+              "bbox": [
+                0.1,
+                0.2,
+                0.36666666666666664,
+                0.25
+              ]
+            },
+            {
+              "id": "r0c1",
+              "row": 0,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Strength kPa",
+              "bbox": [
+                0.36666666666666664,
+                0.2,
+                0.6333333333333333,
+                0.25
+              ]
+            },
+            {
+              "id": "r0c2",
+              "row": 0,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Elongation %",
+              "bbox": [
+                0.6333333333333333,
+                0.2,
+                0.9,
+                0.25
+              ]
+            },
+            {
+              "id": "r1c0",
+              "row": 1,
+              "column": 0,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Ex3",
+              "bbox": [
+                0.1,
+                0.25,
+                0.36666666666666664,
+                0.3
+              ]
+            },
+            {
+              "id": "r1c1",
+              "row": 1,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "35.2",
+              "bbox": [
+                0.36666666666666664,
+                0.25,
+                0.6333333333333333,
+                0.3
+              ]
+            },
+            {
+              "id": "r1c2",
+              "row": 1,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "120",
+              "bbox": [
+                0.6333333333333333,
+                0.25,
+                0.9,
+                0.3
+              ]
+            },
+            {
+              "id": "r2c0",
+              "row": 2,
+              "column": 0,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "Ex4",
+              "bbox": [
+                0.1,
+                0.3,
+                0.36666666666666664,
+                0.35
+              ]
+            },
+            {
+              "id": "r2c1",
+              "row": 2,
+              "column": 1,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "40.8",
+              "bbox": [
+                0.36666666666666664,
+                0.3,
+                0.6333333333333333,
+                0.35
+              ]
+            },
+            {
+              "id": "r2c2",
+              "row": 2,
+              "column": 2,
+              "row_span": 1,
+              "col_span": 1,
+              "raw_text": "140",
+              "bbox": [
+                0.6333333333333333,
+                0.3,
+                0.9,
+                0.35
+              ]
+            }
+          ]
+        }
+      ],
+      "logical_tables": [
+        [
+          "t1p1"
+        ],
+        [
+          "t1p2"
+        ]
+      ],
+      "numeric_facts": [
+        {
+          "fragment_id": "t1p1",
+          "cell_id": "r1c1",
+          "raw_value": "35.2",
+          "row_header_cell_ids": [
+            "r1c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c1"
+          ]
+        },
+        {
+          "fragment_id": "t1p1",
+          "cell_id": "r1c2",
+          "raw_value": "120",
+          "row_header_cell_ids": [
+            "r1c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c2"
+          ]
+        },
+        {
+          "fragment_id": "t1p1",
+          "cell_id": "r2c1",
+          "raw_value": "40.8",
+          "row_header_cell_ids": [
+            "r2c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c1"
+          ]
+        },
+        {
+          "fragment_id": "t1p1",
+          "cell_id": "r2c2",
+          "raw_value": "140",
+          "row_header_cell_ids": [
+            "r2c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c2"
+          ]
+        },
+        {
+          "fragment_id": "t1p2",
+          "cell_id": "r1c1",
+          "raw_value": "35.2",
+          "row_header_cell_ids": [
+            "r1c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c1"
+          ]
+        },
+        {
+          "fragment_id": "t1p2",
+          "cell_id": "r1c2",
+          "raw_value": "120",
+          "row_header_cell_ids": [
+            "r1c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c2"
+          ]
+        },
+        {
+          "fragment_id": "t1p2",
+          "cell_id": "r2c1",
+          "raw_value": "40.8",
+          "row_header_cell_ids": [
+            "r2c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c1"
+          ]
+        },
+        {
+          "fragment_id": "t1p2",
+          "cell_id": "r2c2",
+          "raw_value": "140",
+          "row_header_cell_ids": [
+            "r2c0"
+          ],
+          "column_header_cell_ids": [
+            "r0c2"
+          ]
+        }
+      ]
+    }
+  ]
+}

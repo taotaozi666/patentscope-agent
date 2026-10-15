@@ -8,7 +8,7 @@ from uuid import NAMESPACE_URL, uuid5
 from app.schemas.pdf import ParsedPdf, PdfElement, SemanticObject, SourceSpan
 from .normalization import PATENT_PARAGRAPH_START
 
-OBJECT_VERSION = "semantic-objects-v4"
+OBJECT_VERSION = "semantic-objects-v8"
 
 
 def build_objects(parsed: ParsedPdf) -> list[SemanticObject]:
@@ -105,6 +105,7 @@ def build_objects(parsed: ParsedPdf) -> list[SemanticObject]:
                             "has_embedded_text": bool(image.payload.get("native_text"))}})
 
     pending: list[PdfElement] = []
+    logical_by_fragment = {identifier: table for table in parsed.logical_tables for identifier in table.fragment_ids}
 
     def flush() -> None:
         if pending:
@@ -124,6 +125,14 @@ def build_objects(parsed: ParsedPdf) -> list[SemanticObject]:
             continue
         if element.kind == "table":
             flush()
+            logical = logical_by_fragment.get(element.id)
+            if logical is not None:
+                if element.id != logical.fragment_ids[0]:
+                    continue
+                from .tables.logical_objects import logical_payload
+                text, spans, payload = logical_payload(parsed, logical)
+                add("table", logical.title, text, spans, [], payload)
+                continue
             neighbors = [item for item in parsed.elements[max(0, index-4):index+5]
                          if item.kind == "paragraph" and item.span.page_no == element.span.page_no
                          and item.section_path == element.section_path
@@ -164,6 +173,17 @@ def _join(elements: list[PdfElement], *, numbered_paragraphs: bool = False) -> t
             text += "\n" if numbered_paragraphs and (starts_number or in_numbered_paragraph) else "\n\n"
         start = len(text)
         text += element.text
+        fragments = element.payload.get("text_fragments")
+        if fragments:
+            for fragment in fragments:
+                mapping = {"start": start + fragment["start"], "end": start + fragment["end"],
+                           "element_id": element.id, "span": fragment["span"],
+                           "evidence_id": fragment["evidence_id"],
+                           "role": "ocr" if fragment["origin"] == "ocr" else "source"}
+                if fragment["origin"] == "native":
+                    mapping.update(source_char_start=fragment["start"], source_char_end=fragment["end"])
+                mappings.append(mapping)
+            continue
         is_ocr = element.payload.get("text_origin") == "ocr"
         mapping = {"start": start, "end": len(text), "element_id": element.id,
                    "span": asdict(element.span), "role": "ocr" if is_ocr else "source"}

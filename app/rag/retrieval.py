@@ -1,9 +1,32 @@
 """检索候选去噪、同文档内容合并；不修改入库的原始切片。"""
 import re
 import json
+from dataclasses import replace
 from app.pdf.normalization import is_page_number_region
 from app.patent_identifiers import normalize_publication_number
-from app.schemas import Hit
+from app.schemas import Hit, ChunkRecord
+
+
+def fuse_rankings(vector: list[tuple[ChunkRecord, float]], keyword: list[tuple[ChunkRecord, float]],
+                  *, constant: int = 60, vector_weight: float = 1.0,
+                  keyword_weight: float = 1.0) -> list[tuple[ChunkRecord, float]]:
+    """RRF 按稳定切片 ID 融合，两路原始分数仅用于诊断。"""
+    records: dict[str, ChunkRecord] = {}
+    scores: dict[str, float] = {}
+    channels: dict[str, dict[str, dict[str, int | float]]] = {}
+    for name, ranked, weight in (("vector", vector, vector_weight), ("keyword", keyword, keyword_weight)):
+        seen: set[str] = set()
+        for rank, (record, score) in enumerate(ranked, 1):
+            if record.id in seen:
+                continue
+            seen.add(record.id)
+            records.setdefault(record.id, record)
+            scores[record.id] = scores.get(record.id, 0.0) + weight / (constant + rank)
+            channels.setdefault(record.id, {})[name] = {"rank": rank, "score": score}
+    result = [(replace(record, metadata={**record.metadata, "retrieval_method": "hybrid_rrf",
+                                        "retrieval_channels": channels[identifier]}), scores[identifier])
+              for identifier, record in records.items()]
+    return sorted(result, key=lambda item: (-item[1], item[0].id))
 
 
 def merge_candidates(ranked):
@@ -15,7 +38,9 @@ def merge_candidates(ranked):
         text = re.sub(r"\s+", " ", record.text).strip()
         # 图片 OCR 相同并不证明图片相同，保留各图入口；纯公开号已在上方过滤。
         image = record.metadata.get("image_id", "")
-        key = (record.document_id, text, image)
+        # Equal table text may identify different experiments or physical cells.
+        table_identity = (record.metadata.get("pdf_chunk_id") or record.id) if record.metadata.get("doc_type_kwd") == "table" else ""
+        key = (record.document_id, text, image, table_identity)
         location = {"chunk": record.chunk, "page_start": record.metadata.get("page_start"),
                     "page_end": record.metadata.get("page_end"),
                     "section": record.metadata.get("section_path", "")}

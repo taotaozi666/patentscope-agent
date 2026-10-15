@@ -8,6 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import pymupdf
+from app.pdf.ocr import OcrResult
 
 from app.rag import RAGService
 from app.rag.embeddings import DemoEmbedder
@@ -55,9 +56,9 @@ class PdfTests(unittest.TestCase):
                   ((60, 160, 200, 180), "Second OCR block"),
                   ((300, 120, 460, 140), "Native image text"),
                   ((300, 180, 460, 200), "Additional OCR label")]
-        with patch("app.pdf.parser._ocr_blocks", return_value=blocks) as ocr:
+        with patch("app.pdf.parser.ocr_region", return_value=OcrResult(blocks)) as ocr:
             parsed = parse_pdf("images.pdf", content)
-        ocr.assert_called_once()
+        self.assertEqual(ocr.call_count, 2)
         images = [element for element in parsed.elements if element.kind == "image"]
         recognized = next(element for element in images if element.payload["text_origin"] == "ocr")
         self.assertEqual(recognized.text, "First OCR block\nSecond OCR block")

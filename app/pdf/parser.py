@@ -7,92 +7,61 @@ from typing import cast
 
 import pymupdf
 
-from app.schemas.pdf import NativeImageInfo, NativeTextPage, ParsedPdf, PdfElement, SourceSpan
+from app.schemas.pdf import ParsedPdf, PdfElement, SourceSpan
 from .patent import PATENT_VERSION, extract_patent
 from .normalization import is_page_number_region
+from .tables.base import TABLE_BACKEND_VERSION, TableOptions, to_element
+from .tables.service import backend_identity, parse_tables, update_regions
+from .tables.assembly import ASSEMBLY_VERSION, assemble_tables
+from pathlib import Path
+from app.schemas.table import TABLE_SCHEMA_VERSION
+from .geometry import source_span as _span
+from .inspection import INSPECTION_VERSION, inspect_page
+from .inspection import _remove_overlapping_text as _remove_overlapping_text
+from .routing import ROUTING_VERSION, route_regions, record_execution
+from .ocr import OCR_VERSION, OcrResult, ocr_region
+from .text_fusion import FUSION_VERSION, TextEvidence, fuse_text, serialize_fusion
+from dataclasses import asdict
+from app.schemas.inspection import PageInspection
 
-PARSER_VERSION = f"native-v9:{PATENT_VERSION}:pymupdf-{pymupdf.VersionBind}"
-
-
-def _span(
-    page: pymupdf.Page,
-    bbox: tuple[float, float, float, float],
-    element_id: str,
-    granularity: str = "region",
-) -> SourceSpan:
-    # 原生坐标先应用旋转矩阵，再归一化到阅读器显示页。
-    rect = pymupdf.Rect(bbox) * page.rotation_matrix
-    width, height = page.rect.width, page.rect.height
-    normalized = [
-        max(0.0, min(1.0, value))
-        for value in (rect.x0 / width, rect.y0 / height, rect.x1 / width, rect.y1 / height)
-    ]
-    if page.number is None:
-        raise ValueError("PDF 页面未关联文档，无法记录来源页码")
-    return SourceSpan(page.number + 1, page.get_label() or "",
-                      (normalized[0], normalized[1], normalized[2], normalized[3]), element_id, granularity)
+PARSER_VERSION = (f"native-v15:{ASSEMBLY_VERSION}:{TABLE_BACKEND_VERSION}:table-schema-v{TABLE_SCHEMA_VERSION}:{INSPECTION_VERSION}:"
+                  f"{ROUTING_VERSION}:{OCR_VERSION}:{FUSION_VERSION}:{PATENT_VERSION}:pymupdf-{pymupdf.VersionBind}")
 
 
-def _ocr_blocks(page: pymupdf.Page, language: str, dpi: int, full: bool) -> list[tuple[tuple[float, float, float, float], str]]:
-    """Read only Tesseract-created text blocks, keeping their page rectangles."""
-    text_page = page.get_textpage_ocr(language=language, dpi=dpi, full=full)
-    data = page.get_text("dict", textpage=text_page, sort=True)
-    result = []
-    for block in data["blocks"]:
-        if block.get("type") != 0:
-            continue
-        text = "\n".join(
-            span.get("text", "")
-            for line in block.get("lines", [])
-            for span in line.get("spans", [])
-            if "glyphlessfont" in span.get("font", "").lower() and span.get("text", "").strip()
-        ).strip()
+class PdfParseError(ValueError):
+    """解析拒绝时保留诊断，调用方可记录失败页面的处理依据。"""
+
+    def __init__(self, message: str, page_inspections: list[PageInspection],
+                 page_count: int, parser_version: str):
+        super().__init__(message)
+        self.page_inspections = page_inspections
+        self.page_count = page_count
+        self.parser_version = parser_version
+
+
+def _native_evidence(page, block, prefix):
+    evidence = []
+    for index, line in enumerate(block["lines"]):
+        text = "".join(span["text"] for span in line["spans"]).strip()
         if text:
-            result.append((tuple(block["bbox"]), text))
-    return result
+            bbox = tuple(line.get("bbox", block["bbox"]))
+            identifier = f"{prefix}_native{index}"
+            evidence.append(TextEvidence(identifier, text, bbox,
+                            _span(page, bbox, identifier, "line"), "native"))
+    return evidence
 
 
-def _deduplicate_image_infos(images: list[NativeImageInfo]) -> list[NativeImageInfo]:
-    """Merge duplicate/partial raster placements whose smaller box is mostly covered."""
-    groups: list[list[NativeImageInfo]] = []
-
-    def bounds(group: list[NativeImageInfo]) -> tuple[float, float, float, float]:
-        boxes = [tuple(float(value) for value in item["bbox"]) for item in group]
-        return (min(box[0] for box in boxes), min(box[1] for box in boxes),
-                max(box[2] for box in boxes), max(box[3] for box in boxes))
-
-    for image in images:
-        box = tuple(float(value) for value in image["bbox"])
-        digest = image.get("digest")
-        match = None
-        for group in groups:
-            area = max(0.0, box[2]-box[0]) * max(0.0, box[3]-box[1])
-            for member in group:
-                member_box = tuple(float(value) for value in member["bbox"])
-                left, top = max(box[0], member_box[0]), max(box[1], member_box[1])
-                right, bottom = min(box[2], member_box[2]), min(box[3], member_box[3])
-                intersection = max(0.0, right-left) * max(0.0, bottom-top)
-                member_area = max(0.0, member_box[2]-member_box[0]) * max(0.0, member_box[3]-member_box[1])
-                coverage = intersection / min(area, member_area) if min(area, member_area) else 0.0
-                same_image = bool(digest and member.get("digest") == digest)
-                if coverage >= (0.5 if same_image else 0.65):
-                    match = group
-                    break
-            if match is not None:
-                break
-        if match is None:
-            groups.append([image])
-        else:
-            match.append(image)
-
-    merged: list[NativeImageInfo] = []
-    for group in groups:
-        # Preserve useful image properties from the largest underlying placement,
-        # while rendering the union so clipped/masked fragments are not lost.
-        representative = max(group, key=lambda item: (item["bbox"][2]-item["bbox"][0]) *
-                             (item["bbox"][3]-item["bbox"][1]))
-        merged.append({**representative, "bbox": bounds(group)})
-    return merged
+def _ocr_evidence(page, result: OcrResult, prefix: str, bbox):
+    evidence = []
+    bounds = pymupdf.Rect(bbox)
+    for index, (box, text) in enumerate(result.blocks):
+        rect = pymupdf.Rect(box)
+        if not text.strip() or not rect.get_area() or (rect & bounds).get_area() < rect.get_area() * .65:
+            continue
+        identifier = f"{prefix}_ocr{index}"
+        evidence.append(TextEvidence(identifier, text.strip(), box,
+                        _span(page, box, identifier, "line"), "ocr"))
+    return evidence
 
 
 def _intersection_ratio(inner: pymupdf.Rect, outer: pymupdf.Rect) -> float:
@@ -101,8 +70,13 @@ def _intersection_ratio(inner: pymupdf.Rect, outer: pymupdf.Rect) -> float:
 
 
 def parse_pdf(source: str, content: bytes, *, ocr_images: bool = True,
-              ocr_language: str = "chi_sim+eng", ocr_dpi: int = 200) -> ParsedPdf:
+              ocr_language: str = "chi_sim+eng", ocr_dpi: int = 200,
+              table_backend: str = "native", table_mode: str = "accurate",
+              table_models_directory: str = "", table_fallback: bool = True,
+              table_work_directory: str | None = None) -> ParsedPdf:
     """输出有类型和来源位置的元素；可选用 Tesseract 识别图片/扫描页文字。"""
+    options = TableOptions(table_backend, table_models_directory, table_mode, table_fallback, ocr_images, ocr_language)
+    table_identity = backend_identity(options)
     if b"%PDF-" not in content[:1024]:
         raise ValueError("文件不是有效的 PDF，请检查文件内容")
     try:
@@ -117,90 +91,98 @@ def parse_pdf(source: str, content: bytes, *, ocr_images: bool = True,
         elements: list[PdfElement] = []
         warnings: list[str] = []
         content_hash = sha256(content).hexdigest()
+        ocr_suffix = f":ocr-{ocr_language}-{ocr_dpi}" if ocr_images else ":ocr-off"
+        parser_version = PARSER_VERSION + f":tables-{table_identity}" + ocr_suffix
         sizes: list[float] = []
         toc = cast(list[tuple[int, str, int]], document.get_toc())
         bookmarks = {(page_no, title.strip()): level for level, title, page_no in toc}
         scanned: list[int] = []
+        diagnoses: list[PageInspection] = []
+        table_fragments = []
         for page in document:
             if page.number is None:
                 raise ValueError("PDF 页面未关联文档，无法记录来源页码")
             page_no = page.number + 1
-            # get_text 的返回类型取决于模式，SDK 的联合类型无法推断固定的 dict 模式。
-            text_page = cast(NativeTextPage, page.get_text("dict", sort=True,
-                flags=pymupdf.TEXTFLAGS_DICT & ~pymupdf.TEXT_PRESERVE_IMAGES))
-            raw_blocks = text_page["blocks"]
-            text_blocks = [block for block in raw_blocks if block["type"] == 0]
-            _remove_overlapping_text(text_blocks)
-            images = _deduplicate_image_infos(cast(list[NativeImageInfo], page.get_image_info()))
-            if not any(line.get("spans") for block in text_blocks for line in block["lines"]):
-                if images or len(page.get_drawings()) > 100:
-                    recognized = []
+            inspected = inspect_page(page)
+            diagnosis = inspected.diagnosis
+            diagnoses.append(diagnosis)
+            diagnosis.routes = route_regions(diagnosis, ocr_enabled=ocr_images)
+            try:
+                table_result = parse_tables(page, inspected, options,
+                                            table_work_directory or str(Path.cwd() / ".documents" / "table-work"))
+            except ValueError as exc:
+                diagnosis.metrics["table_backends"] = [{"backend": options.backend, "status": "failed", "reason": str(exc)}]
+                diagnosis.warnings.append(str(exc))
+                raise PdfParseError(str(exc), diagnoses, document.page_count, parser_version) from exc
+            table_fragments.extend(table_result.fragments)
+            diagnosis.metrics["table_backends"] = table_result.attempts
+            warnings.extend(table_result.warnings)
+            diagnosis.warnings.extend(table_result.warnings)
+            update_regions(page, inspected, table_result.fragments)
+            diagnosis.routes = route_regions(diagnosis, ocr_enabled=ocr_images)
+            warnings.extend(diagnosis.warnings)
+            text_blocks, images = inspected.text_blocks, inspected.images
+            table_rects, reliable_table_rects = [], []
+            for fragment in table_result.fragments:
+                table_element = to_element(fragment, content_hash)
+                elements.append(table_element)
+                raw = pymupdf.Rect(fragment.span.bbox[0] * page.rect.width,
+                                   fragment.span.bbox[1] * page.rect.height,
+                                   fragment.span.bbox[2] * page.rect.width,
+                                   fragment.span.bbox[3] * page.rect.height) * page.derotation_matrix
+                table_rects.append(raw)
+                if fragment.structure_status == fragment.provenance_status == "complete":
+                    reliable_table_rects.append(raw)
+            if not diagnosis.metrics["native_char_count"]:
+                if any("page_ocr" in route.planned_operations for route in diagnosis.routes):
+                    result = OcrResult()
                     if ocr_images:
                         try:
-                            recognized = _ocr_blocks(page, ocr_language, ocr_dpi, full=True)
+                            result = ocr_region(page, tuple(page.rect * page.derotation_matrix), ocr_language, ocr_dpi,
+                                                exclude_regions=[tuple(rect) for rect in reliable_table_rects])
                         except Exception as exc:
+                            for route in diagnosis.routes:
+                                if "page_ocr" in route.planned_operations:
+                                    route.failed_operations = ["page_ocr"]
                             warnings.append(f"第 {page_no} 页整页 OCR 失败，未能提取扫描文字。{_ocr_failure_reason(exc, ocr_language)}")
-                    text = "\n".join(value for _, value in recognized).strip()
-                    if text:
+                            diagnosis.warnings.append(warnings[-1])
+                    evidence = _ocr_evidence(page, result, f"p{page_no}_scan", tuple(page.rect * page.derotation_matrix))
+                    evidence = [item for item in evidence if not any(
+                        _intersection_ratio(pymupdf.Rect(item.bbox), rect) >= .8 for rect in table_rects)]
+                    fusion = fuse_text([], evidence)
+                    if fusion.selected or table_result.fragments:
                         image_element_id = f"p{page_no}_page_image"
                         image_id = sha256(f"{content_hash}:{image_element_id}".encode()).hexdigest()
+                        # 背景图保留 OCR 原始通道；仅独立段落进入索引，避免重复。
                         elements.append(PdfElement(
-                            image_element_id, "image", text,
+                            image_element_id, "image", "",
                             SourceSpan(page_no, page.get_label() or "", (0.0, 0.0, 1.0, 1.0), image_element_id, "page"),
                             payload={"doc_type_kwd": "image", "layout_type": "page_image", "image_id": image_id,
-                                     "native_text": "", "ocr_text": text, "ocr_status": "recognized", "text_origin": "ocr",
+                                     "native_text": "", "ocr_text": "\n".join(text for _, text in result.blocks),
+                                     "ocr_status": "recognized" if evidence else "unavailable" if any(
+                                         route.failed_operations for route in diagnosis.routes) else "no_text" if ocr_images else "disabled",
+                                     "ocr_scope": "page", "text_origin": "ocr",
+                                     "ocr_transform": result.transform, "ocr_blocks": [asdict(item) for item in evidence],
                                      "properties": {"width": page.rect.width, "height": page.rect.height,
-                                                    "ocr_engine": "tesseract", "ocr_language": ocr_language,
-                                                    "ocr_dpi": ocr_dpi}},
+                                                    "ocr_engine": "tesseract", "ocr_language": ocr_language, "ocr_dpi": ocr_dpi}},
                         ))
+                        for index, item in enumerate(fusion.selected):
+                            element_id = f"p{page_no}_scan_text{index}"
+                            elements.append(PdfElement(element_id, "paragraph", item.text,
+                                _span(page, item.bbox, element_id, "line"),
+                                payload={"doc_type_kwd": "text", "layout_type": "paragraph",
+                                         "text_origin": "ocr", "ocr_status": "recognized", "ocr_scope": "page",
+                                         "image_id": image_id, "scan_region_id": image_element_id}))
                         continue
                     scanned.append(page_no)
                 continue
-            # 保留网格和单元格来源；合并单元格等复杂结构标记待复核。
-            tables = []
-            try:
-                finder = page.find_tables()
-                if finder is not None:
-                    tables = finder.tables
-            except Exception:
-                warnings.append(f"第 {page_no} 页表格检测失败，已保留原生文字，表格需复核")
-            table_rects = []
-            for table_index, table in enumerate(tables):
-                rows = table.extract()
-                if len(rows) < 2 or table.col_count < 2:
-                    continue
-                element_id = f"p{page_no}_table{table_index}"
-                table_image_id = sha256(f"{content_hash}:{element_id}".encode()).hexdigest()
-                cells = []
-                for row_index, row in enumerate(rows):
-                    for column_index, value in enumerate(row):
-                        bbox = table.rows[row_index].cells[column_index]
-                        cell_id = f"{element_id}_r{row_index}c{column_index}"
-                        cells.append({
-                            "id": cell_id, "row": row_index, "column": column_index,
-                            "raw_text": value, "source_page_no": page_no,
-                            "fragment_id": element_id,
-                            "span": vars(_span(page, bbox, cell_id, "cell")) if bbox else None,
-                        })
-                uncertain = any(cell["span"] is None for cell in cells)
-                if uncertain:
-                    warnings.append(f"第 {page_no} 页有复杂表格单元格，合并关系和位置需复核")
-                elements.append(PdfElement(
-                    element_id, "table", "\n".join(" | ".join(value or "" for value in row) for row in rows),
-                    _span(page, table.bbox, element_id),
-                    payload={"rows": rows, "cells": cells, "requires_review": uncertain,
-                             "structure": "basic_grid", "row_count": len(rows), "column_count": table.col_count,
-                             "doc_type_kwd": "table", "layout_type": "table", "text_origin": "native",
-                             "image_id": table_image_id,
-                             "properties": {"row_count": len(rows), "column_count": table.col_count,
-                                            "structure": "basic_grid"}},
-                ))
-                table_rects.append(pymupdf.Rect(table.bbox))
             image_rects = [pymupdf.Rect(image["bbox"]) for image in images]
             image_native_text = [""] * len(images)
+            image_native_evidence = [[] for _ in images]
+            page_indexed_evidence = []
             for block_index, block in enumerate(text_blocks):
                 rect = pymupdf.Rect(block["bbox"])
-                if any((rect & table_rect).get_area() >= rect.get_area() * 0.8 for table_rect in table_rects):
+                if any((rect & table_rect).get_area() >= rect.get_area() * diagnosis.policy["block_table_overlap"] for table_rect in table_rects):
                     continue  # 表格文字已保存为结构表，避免再次索引相同数字。
                 spans = [span for line in block["lines"] for span in line["spans"]]
                 text = "\n".join("".join(span["text"] for span in line["spans"]) for line in block["lines"]).strip()
@@ -208,57 +190,89 @@ def parse_pdf(source: str, content: bytes, *, ocr_images: bool = True,
                     continue
                 image_matches = [(_intersection_ratio(rect, image_rect), index)
                                  for index, image_rect in enumerate(image_rects)]
-                image_matches = [match for match in image_matches if match[0] >= 0.65]
+                image_matches = [match for match in image_matches if match[0] >= diagnosis.policy["block_image_overlap"]]
                 if image_matches:
                     _, image_index = max(image_matches)
                     image_native_text[image_index] = (image_native_text[image_index] + "\n" + text).strip()
+                    image_native_evidence[image_index].extend(_native_evidence(page, block, f"p{page_no}_b{block_index}"))
                     continue  # 图片中的可选文字归入图片元素，避免再次作为正文段落切片。
-                if text.count("\ufffd") / len(text) > 0.02:
-                    raise ValueError(f"第 {page_no} 页文字层乱码，需要 OCR 后再导入")
+                if text.count("\ufffd") / len(text) > diagnosis.policy["replacement_ratio"]:
+                    if not ocr_images:
+                        raise PdfParseError(f"第 {page_no} 页文字层乱码，需要 OCR 后再导入", diagnoses,
+                                            document.page_count, parser_version)
+                    element_id = f"p{page_no}_text{block_index}"
+                    try:
+                        x0, y0, x1, y1 = block["bbox"]
+                        result = ocr_region(page, (x0, y0, x1, y1), ocr_language, ocr_dpi)
+                        fusion = fuse_text(_native_evidence(page, block, element_id),
+                                           _ocr_evidence(page, result, element_id, block["bbox"]))
+                        repaired, fragments = serialize_fusion(fusion)
+                        if not repaired or "\ufffd" in repaired:
+                            raise ValueError("OCR 未恢复异常文字")
+                    except Exception as exc:
+                        for route in diagnosis.routes:
+                            if route.region_id == element_id:
+                                route.failed_operations = ["region_ocr"]
+                        warnings.append(f"第 {page_no} 页异常文字区域 OCR 未完成。{_ocr_failure_reason(exc, ocr_language)}")
+                        diagnosis.warnings.append(warnings[-1])
+                        raise PdfParseError(f"第 {page_no} 页文字层乱码，区域 OCR 未能恢复，需要复核后再导入",
+                                            diagnoses, document.page_count, parser_version) from exc
+                    elements.append(PdfElement(element_id, "paragraph", repaired, _span(page, block["bbox"], element_id),
+                        payload={"doc_type_kwd": "text", "layout_type": "paragraph", "text_origin": "ocr",
+                                 "native_text": text, "ocr_text": "\n".join(value for _, value in result.blocks),
+                                 "ocr_status": "recognized", "ocr_scope": "region", "text_fragments": fragments,
+                                 "ocr_transform": result.transform, "text_conflicts": fusion.conflicts}))
+                    warnings.append(f"第 {page_no} 页异常文字已使用区域 OCR 恢复，原生文字和备选结果已保留，请复核。")
+                    page_indexed_evidence.extend(fusion.selected)
+                    continue
                 font_size = max(float(span["size"]) for span in spans)
                 sizes.extend(float(span["size"]) for span in spans if span["text"].strip())
                 element_id = f"p{page_no}_text{block_index}"
                 elements.append(PdfElement(element_id, "paragraph", text, _span(page, block["bbox"], element_id),
                                            font_size, payload={"doc_type_kwd": "text", "layout_type": "paragraph",
                                                               "text_origin": "native", "properties": {"font_size": font_size}}))
-            image_texts = list(image_native_text)
-            image_ocr_texts = [""] * len(images)
-            image_origins = ["native" if text else "none" for text in image_texts]
-            image_status = ["not_needed" if text else "disabled" if not ocr_images else "no_text"
-                            for text in image_texts]
-            if images and ocr_images:
-                # 包括已有部分文字层的图片，OCR 补充内容独立保存。
-                ocr_targets = set(range(len(images)))
-                image_status = ["no_text"] * len(images)
-                try:
-                    recognized = _ocr_blocks(page, ocr_language, ocr_dpi, full=True)
-                    for bbox, text in recognized:
-                        text_rect = pymupdf.Rect(bbox)
-                        matches = []
-                        for image_index, image in enumerate(images):
-                            overlap = text_rect & pymupdf.Rect(image["bbox"])
-                            if not overlap.is_empty and overlap.get_area() >= text_rect.get_area() * .65:
-                                matches.append((overlap.get_area(), image_index))
-                        matches = [match for match in matches if match[1] in ocr_targets]
-                        if matches:
-                            _, image_index = max(matches)
-                            image_ocr_texts[image_index] = (image_ocr_texts[image_index] + "\n" + text).strip()
-                            image_texts[image_index] = _merge_image_text(image_native_text[image_index], image_ocr_texts[image_index])
-                            image_status[image_index] = "recognized"
-                            image_origins[image_index] = "mixed" if image_native_text[image_index] else "ocr"
-                except Exception as exc:
-                    image_status = ["unavailable"] * len(images)
-                    warnings.append(f"第 {page_no} 页有 {len(ocr_targets)} 个图片区域未能完成补充 OCR；图片及已有原生文字仍保留，未覆盖的文字可能缺失。{_ocr_failure_reason(exc, ocr_language)}")
+                page_indexed_evidence.extend(_native_evidence(page, block, element_id))
+            existing_evidence = list(page_indexed_evidence)
+            ocr_region_ids = {route.region_id for route in diagnosis.routes
+                              if "region_ocr" in route.planned_operations
+                              and "region_ocr" not in route.disabled_operations}
             for image_index, image in enumerate(images):
                 element_id = f"p{page_no}_image{image_index}"
                 image_id = sha256(f"{content_hash}:{element_id}".encode()).hexdigest()
+                result = OcrResult()
+                native = image_native_evidence[image_index]
+                status = "not_needed" if native else "disabled" if not ocr_images else "no_text"
+                if element_id in ocr_region_ids:
+                    try:
+                        x0, y0, x1, y1 = image["bbox"]
+                        result = ocr_region(page, (x0, y0, x1, y1), ocr_language, ocr_dpi,
+                                            exclude_regions=[tuple(rect) for rect in reliable_table_rects])
+                        status = "recognized" if result.blocks else "no_text"
+                    except Exception as exc:
+                        status = "unavailable"
+                        warnings.append(f"第 {page_no} 页图片区域 {image_index + 1} OCR 失败，已有原生文字仍保留。{_ocr_failure_reason(exc, ocr_language)}")
+                crop_evidence = _ocr_evidence(page, result, element_id, image["bbox"])
+                if status == "recognized" and not crop_evidence:
+                    status = "no_text"
+                # 同一页面的可靠原生表格已经有独立索引，不再次作为图片文字入库。
+                evidence = [item for item in crop_evidence if not any(
+                    _intersection_ratio(pymupdf.Rect(item.bbox), rect) >= .8 for rect in table_rects)]
+                fusion = fuse_text(native, evidence, existing=existing_evidence)
+                image_text, fragments = serialize_fusion(fusion)
+                existing_evidence.extend(fusion.selected)
+                if fusion.conflicts:
+                    warnings.append(f"第 {page_no} 页图片区域 {image_index + 1} 原生文字与 OCR 存在冲突，已保留备选来源，请复核。")
+                ocr_text = "\n".join(item.text for item in crop_evidence)
+                origin = "mixed" if native and ocr_text else "native" if native else "ocr" if ocr_text else "none"
                 elements.append(PdfElement(
-                    element_id, "image", image_texts[image_index], _span(page, image["bbox"], element_id),
+                    element_id, "image", image_text, _span(page, image["bbox"], element_id),
                     payload={"doc_type_kwd": "image", "layout_type": "image", "image_id": image_id,
-                             "native_text": image_native_text[image_index],
-                             "ocr_text": image_ocr_texts[image_index],
-                             "ocr_status": image_status[image_index],
-                             "text_origin": image_origins[image_index],
+                             "native_text": image_native_text[image_index], "ocr_text": ocr_text,
+                             "ocr_blocks": [asdict(item) for item in evidence], "native_blocks": [asdict(item) for item in native],
+                             "text_fragments": fragments, "text_conflicts": fusion.conflicts,
+                             "text_duplicates": fusion.duplicates, "ocr_transform": result.transform,
+                             "ocr_status": status, "ocr_scope": "region" if element_id in ocr_region_ids else "none",
+                             "text_origin": origin,
                              "properties": {"xref": image.get("xref"), "width": image.get("width"),
                                             "height": image.get("height"), "colorspace": image.get("cs-name")}},
                 ))
@@ -271,9 +285,11 @@ def parse_pdf(source: str, content: bytes, *, ocr_images: bool = True,
                 warnings.append(f"第 {page_no} 页可能为多栏版面，阅读顺序需人工核对")
         if scanned:
             pages = "、".join(map(str, scanned[:20]))
-            raise ValueError(f"PDF 第 {pages} 页没有可用文字层，需要 OCR；当前最小版不导入扫描正文页")
+            raise PdfParseError(f"PDF 第 {pages} 页没有可用文字层，需要 OCR；当前最小版不导入扫描正文页", diagnoses,
+                                document.page_count, parser_version)
         if not any(element.text for element in elements):
-            raise ValueError("PDF 没有可导入的原生文字，需要 OCR 或图像理解")
+            raise PdfParseError("PDF 没有可导入的原生文字，需要 OCR 或图像理解", diagnoses,
+                                document.page_count, parser_version)
 
         # 简单原生版面基线：按页内块顺序排列，复杂双栏不宣称已可靠恢复。
         elements.sort(key=lambda item: (item.span.page_no, item.span.bbox[1], item.span.bbox[0]))
@@ -296,12 +312,19 @@ def parse_pdf(source: str, content: bytes, *, ocr_images: bool = True,
             element.payload["layout_type"] = element.kind
         title = (document.metadata or {}).get("title", "").strip()
         title = title or next((element.text for element in elements if element.kind == "heading"), source)
-        ocr_suffix = f":ocr-{ocr_language}-{ocr_dpi}" if ocr_images else ":ocr-off"
         parsed = ParsedPdf(source, content_hash, title, document.page_count,
-                           PARSER_VERSION + ocr_suffix, elements, list(dict.fromkeys(warnings)))
+                           parser_version, elements, list(dict.fromkeys(warnings)),
+                           page_inspections=diagnoses)
         parsed.patent = extract_patent(parsed)
         if parsed.patent:
             parsed.warnings.extend(parsed.patent.warnings)
+        for diagnosis in diagnoses:
+            record_execution(diagnosis, [element for element in elements if element.span.page_no == diagnosis.page_no])
+        by_element = {element.id: element for element in elements}
+        for fragment in table_fragments:
+            fragment.section_path = by_element[fragment.id].section_path
+        parsed.table_fragments = table_fragments
+        assemble_tables(parsed)
         return parsed
 
 
@@ -340,45 +363,8 @@ def _mark_repeated_furniture(elements: list[PdfElement], page_count: int) -> Non
             element.kind = "furniture"
 
 
-def _remove_overlapping_text(blocks) -> None:
-    """同页相同文字且区域几乎重合才去重；保留不同位置的重复数字。"""
-    seen = {}
-    for block in blocks:
-        for line in block["lines"]:
-            retained = []
-            for span in line["spans"]:
-                text = span["text"]
-                box = span.get("bbox")
-                if not text.strip() or box is None:
-                    retained.append(span)
-                    continue
-                rect = pymupdf.Rect(box)
-                duplicate = any(
-                    min(rect.get_area(), old.get_area()) > 0
-                    and (rect & old).get_area() / min(rect.get_area(), old.get_area()) >= .95
-                    and all(abs(a-b) <= 1 for a, b in zip(rect, old))
-                    for old in seen.get(text, [])
-                )
-                if not duplicate:
-                    retained.append(span)
-                    seen.setdefault(text, []).append(rect)
-            line["spans"] = retained
-
-
 def _ocr_failure_reason(exc: Exception, language: str) -> str:
     detail = str(exc).lower()
     if any(token in detail for token in ("tessdata", "tesseract is not installed", "failed loading language", "traineddata")):
         return f"OCR 环境或语言数据不可用，请检查 Tesseract、{language} 语言包及 TESSDATA_PREFIX 配置。"
     return f"OCR 执行失败（{type(exc).__name__}），需检查引擎或图片处理情况，不能据此判断缺少安装。"
-
-
-def _merge_image_text(native: str, ocr: str) -> str:
-    """保留各通道原文；用于检索的组合文本仅去除相同的行。"""
-    lines = native.splitlines()
-    known = {re.sub(r"\s+", " ", line).strip() for line in lines}
-    for line in ocr.splitlines():
-        key = re.sub(r"\s+", " ", line).strip()
-        if key and key not in known:
-            lines.append(line)
-            known.add(key)
-    return "\n".join(lines).strip()

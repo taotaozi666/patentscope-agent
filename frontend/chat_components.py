@@ -50,7 +50,8 @@ def _render_source(number: int, hit: Hit, *, show_score: bool, show_image: bool 
         end = hit.metadata.get("page_end", start)
         label += f" · 第 {start} 页" if start == end else f" · 第 {start}–{end} 页"
     if show_score:
-        label += f" · 相似度 {hit.score:.3f}"
+        score_label = "融合得分" if hit.metadata.get("retrieval_method") == "hybrid_rrf" else "相似度"
+        label += f" · {score_label} {hit.score:.3f}"
     st.write(label)
     locations = hit.metadata.get("duplicate_locations", [])
     if len(locations) > 1:
@@ -74,3 +75,6 @@ def _render_source(number: int, hit: Hit, *, show_score: bool, show_image: bool 
             st.text(hit.text or "（该图片切片没有可显示的文字）")
     else:
         st.text(hit.text or "（该片段没有可显示的文字）")
+    if hit.metadata.get("table_evidence"):
+        from app.rag.table_evidence import table_evidence_text
+        st.text(table_evidence_text(hit))

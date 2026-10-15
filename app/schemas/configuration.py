@@ -26,3 +26,12 @@ class Settings:
     pdf_image_ocr: bool = True
     pdf_ocr_language: str = "chi_sim+eng"
     pdf_ocr_dpi: int = 200
+    pdf_table_backend: str = "native"
+    pdf_table_mode: str = "accurate"
+    pdf_table_models_directory: str = ""
+    pdf_table_fallback: bool = True
+    retrieval_mode: str = "hybrid"
+    retrieval_candidates: int = 30
+    retrieval_rrf_constant: int = 60
+    retrieval_vector_weight: float = 1.0
+    retrieval_keyword_weight: float = 1.0

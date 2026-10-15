@@ -12,7 +12,7 @@ from app.schemas.pdf import ParsedPdf, SemanticObject
 from .normalization import PDF_TEXT_NORMALIZATION_VERSION, normalize_pdf_text
 from .objects import build_objects
 
-CHUNKER_VERSION = "semantic-chunks-v8"
+CHUNKER_VERSION = "semantic-chunks-v13"
 
 
 def build_chunks(parsed: ParsedPdf, size: int = 600, target: int = 0) -> list[Document]:
@@ -21,6 +21,8 @@ def build_chunks(parsed: ParsedPdf, size: int = 600, target: int = 0) -> list[Do
         raise ValueError("PDF 分块上限至少为 40，目标预算必须介于 0 和上限之间")
     target = target or max(40, int(size * .8))
     objects = build_objects(parsed)
+    from .tables.evidence import index_cells, supporting_cells
+    table_cells = index_cells(asdict(c) for f in parsed.table_fragments for c in f.cells)
     run_id = sha256(f"{parsed.content_hash}:{parsed.source}:{parsed.parser_version}".encode()).hexdigest()
     output: list[Document] = []
     child_counts: dict[str, int] = defaultdict(int)
@@ -41,6 +43,12 @@ def build_chunks(parsed: ParsedPdf, size: int = 600, target: int = 0) -> list[Do
             context += "本项引用权利要求 " + "、".join(map(str, parent.payload["depends_on"])) + "，解释时需要对应基础条件。"
         if parent.kind == "table":
             context += "；".join([*parent.payload.get("units", []), *parent.payload.get("notes", [])])[:300]
+            ids = {m.get("cell_id") for m in mappings}
+            relations = {i: {**value, "support": supporting_cells(table_cells[i], table_cells)}
+                         for i, value in parent.payload.get("cell_relations", {}).items() if i in ids}
+            support = {s["cell_id"]: s["text"] for value in relations.values() for s in value["support"]}
+            if support:
+                context += "表格关联原文：" + "；".join(v[:160] for v in support.values() if v)[:700] + "。"
         if parent.kind == "figure":
             if parent.payload.get("ocr_status") == "recognized":
                 context += "图内 OCR 文字已提取；图形关系和视觉语义仍需结合原图核对。"
@@ -87,12 +95,23 @@ def build_chunks(parsed: ParsedPdf, size: int = 600, target: int = 0) -> list[Do
             "context_is_evidence": False,
             "context_source_spans": json.dumps(parent.payload.get("related_spans", []), ensure_ascii=False),
             "pdf_chunk_size": size, "pdf_target_size": target, "_pdf_index_text": context + "\n" + text,
+            "pdf_chunker_version": CHUNKER_VERSION,
             "_pdf_raw_content": raw_text,
             "text_normalization_version": PDF_TEXT_NORMALIZATION_VERSION,
         }
         for name in ("table_id", "claim_number", "patent_section", "figure_number", "visual_status"):
             if name in parent.payload:
                 metadata[name] = parent.payload[name]
+        if parent.kind == "table" and "cell_relations" in parent.payload:
+            metadata["table_cell_relations"] = json.dumps(relations, ensure_ascii=False)
+            metadata["table_fragment_ids"] = json.dumps(parent.payload["fragment_ids"])
+            metadata["table_header_status"] = parent.payload["header_status"]
+            fragment_ids = list(dict.fromkeys(m["fragment_id"] for m in mappings
+                if m.get("fragment_id") and m["role"] != "header" and m["end"] > m["start"]))
+            regions = [parent.payload["fragment_regions"][i] for i in fragment_ids]
+            metadata["table_region_sources"] = json.dumps(regions, ensure_ascii=False)
+            if regions:
+                metadata["image_id"] = regions[0]["image_id"]
         if parent.kind == "claim":
             metadata["depends_on"] = json.dumps(parent.payload["depends_on"])
             metadata["depends_on_parent_ids"] = json.dumps(parent.payload["dependency_object_ids"])
@@ -122,14 +141,26 @@ def build_chunks(parsed: ParsedPdf, size: int = 600, target: int = 0) -> list[Do
                     mappings.append(mapping)
                 emit(parent, parent.raw_content[start:end], mappings)
             continue
+        if "fragment_ids" in parent.payload:
+            from .tables.chunks import table_chunks
+            for text, mappings, extra in table_chunks(parent, size, target, _ranges):
+                if text.strip():
+                    emit(parent, text, mappings, extra)
+            continue
         rows = parent.payload["rows"]
         cells = {(cell["row"], cell["column"]): cell for cell in parent.payload["cells"]}
-        header = rows[0]
+        configured_header_rows = parent.payload.get("header_rows")
+        # Historical objects retain their first-row candidate; new unknown tables
+        # retain every row as data instead of silently losing the first record.
+        header_rows: list[int] = (list(configured_header_rows) if configured_header_rows is not None
+                                  else [0])
+        header = [" / ".join(dict.fromkeys(rows[r][col] for r in header_rows if rows[r][col]))
+                  for col in range(len(rows[0]))]
         pending: list[int] = []
 
         def table_text(indices: list[int]) -> tuple[str, list[dict]]:
             text = ""
-            mappings = []
+            mappings: list[dict] = []
             for row_no in indices:
                 if text:
                     text += "\n"
@@ -140,17 +171,19 @@ def build_chunks(parsed: ParsedPdf, size: int = 600, target: int = 0) -> list[Do
                     text += value or ""
                     cell = cells[(row_no, column)]
                     mappings.append({"start": start, "end": len(text), "cell_id": cell["id"],
-                                     "span": cell["span"], "role": "header" if row_no == 0 else "source"})
+                                     "span": cell["span"], "role": "header" if row_no in header_rows else "source"})
             return text, mappings
 
         def flush() -> None:
             if pending:
-                text, mappings = table_text([0, *pending])
+                text, mappings = table_text([*header_rows, *pending])
                 emit(parent, text, mappings)
                 pending.clear()
 
-        for row_no in range(1, len(rows)):
-            single, _ = table_text([0, row_no])
+        for row_no in range(len(rows)):
+            if row_no in header_rows:
+                continue
+            single, _ = table_text([*header_rows, row_no])
             if len(single) > size:
                 flush()
                 # 超宽行按单元格生成子块；表头、行标识放入有来源关联的上下文。
@@ -163,18 +196,24 @@ def build_chunks(parsed: ParsedPdf, size: int = 600, target: int = 0) -> list[Do
                              "source_char_start": start, "source_char_end": end, "span": cell["span"], "role": "source"}],
                              {"table_row": row_no, "table_column": column, "table_header": header[column] or "",
                               "table_row_label": rows[row_no][0] or "", "table_split": "cell",
-                              "context_table_cell_ids": json.dumps([cells[(0, column)]["id"], cells[(row_no, 0)]["id"]])})
+                              "context_table_cell_ids": json.dumps([*(cells[(r, column)]["id"] for r in header_rows), cells[(row_no, 0)]["id"]])})
                         chunk = output[-1]
                         addition = f"行标识：{(rows[row_no][0] or '未确定')[:150]}；列标题候选：{(header[column] or '未确定')[:150]}。"
                         chunk.metadata["context_text"] += addition
                         chunk.metadata["pdf_context"] = chunk.metadata["context_text"]
                         chunk.metadata["_pdf_index_text"] = chunk.metadata["context_text"] + "\n" + chunk.page_content
                 continue
-            combined, _ = table_text([0, *pending, row_no])
+            combined, _ = table_text([*header_rows, *pending, row_no])
             if pending and len(combined) > target:
                 flush()
             pending.append(row_no)
         flush()
+        if header_rows and len(header_rows) == len(rows):
+            text, mappings = table_text(header_rows)
+            for start, end in _ranges(text, size, target):
+                selected = [{**m, "start": max(m["start"], start)-start, "end": min(m["end"], end)-start}
+                            for m in mappings if min(m["end"], end) > max(m["start"], start)]
+                emit(parent, text[start:end], selected)
 
     grouped: dict[str, list[Document]] = defaultdict(list)
     for doc in output:

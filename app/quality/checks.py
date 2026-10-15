@@ -11,7 +11,7 @@ from langchain_core.documents import Document
 from app.schemas.pdf import ParsedPdf
 from app.schemas.quality import PageQuality, QualityIssue, QualityReport, QualityStatus
 
-RULE_VERSION = "pdf-quality-v3"
+RULE_VERSION = "pdf-quality-v6"
 
 
 def _valid_span(span: object, page_count: int) -> bool:
@@ -36,11 +36,17 @@ def check_pdf(parsed: ParsedPdf, chunks: list[Document], size: int = 600) -> Qua
     ).hexdigest()
     report_id = sha256(f"{RULE_VERSION}:{run_id}:{size}:{','.join(chunk_ids)}".encode()).hexdigest()
     report = QualityReport(report_id, run_id, RULE_VERSION, datetime.now(UTC).isoformat(), "passed", chunk_ids)
+    issue_ids = set()
 
     def issue(code: str, message: str, page: int | None = None, element: str | None = None,
-              chunk: str | None = None, status: QualityStatus = "review") -> None:
-        identifier = sha256(f"{report_id}:{code}:{page}:{element}:{chunk}:{message}".encode()).hexdigest()[:20]
-        report.issues.append(QualityIssue(identifier, code, status, message, page, element, chunk))
+              chunk: str | None = None, status: QualityStatus = "review", *, table_id=None,
+              cell_ids=None, source_spans=None) -> None:
+        identifier = sha256(f"{report_id}:{code}:{page}:{element}:{chunk}:{message}:{cell_ids or []}".encode()).hexdigest()[:20]
+        if identifier in issue_ids:
+            return
+        issue_ids.add(identifier)
+        report.issues.append(QualityIssue(identifier, code, status, message, page, element, chunk,
+                                         table_id, cell_ids or [], source_spans or []))
 
     title = re.sub(r"[\s()（）\d]", "", parsed.title)
     if title in {"发明专利申请", "发明专利", "实用新型专利", "授权公告", "申请公布"} or parsed.title == parsed.source:
@@ -83,12 +89,20 @@ def check_pdf(parsed: ParsedPdf, chunks: list[Document], size: int = 600) -> Qua
             issue("source_mapping", "字符映射缺失、格式错误或定位无效。", page_no, chunk=chunk_id, status="blocked")
 
     for element in parsed.elements:
+        if element.payload.get("text_conflicts"):
+            numeric = any(item.get("numeric_conflict") for item in element.payload["text_conflicts"])
+            issue("ocr_conflict", "原生文字与 OCR 存在数字冲突，备选来源已保留，请复核。" if numeric else
+                  "原生文字与 OCR 存在文字冲突，备选来源已保留，请复核。",
+                  element.span.page_no, element.id)
         if element.kind == "paragraph" and element.text.strip() and element.id not in covered:
             issue("unindexed_text", "该正文元素未在片段字符映射中找到，可能存在漏索引。", element.span.page_no, element.id)
         if element.text and element.text.count("\ufffd") / len(element.text) > 0.01:
             issue("garbled_text", "文字包含较多替换字符，请对照原页检查乱码。", element.span.page_no, element.id)
         if element.kind == "table" and element.payload.get("requires_review"):
             issue("complex_table", "表格结构或合并单元格需要人工核对。", element.span.page_no, element.id)
+
+    from .tables import check_tables, summarize_tables
+    check_tables(parsed, chunks, issue, _valid_span)
 
     for parent in parsed.objects:
         if parent.kind == "figure" and parent.payload.get("requires_review"):
@@ -114,4 +128,5 @@ def check_pdf(parsed: ParsedPdf, chunks: list[Document], size: int = 600) -> Qua
         match = re.search(r"第\s*(\d+)\s*页", warning)
         issue("parser_warning", warning, int(match.group(1)) if match else None)
     report.status = "blocked" if any(item.status == "blocked" for item in report.issues) else "review" if report.issues else "passed"
+    report.tables = summarize_tables(parsed, report.issues)
     return report

@@ -37,6 +37,21 @@ class ChatComponentsTests(unittest.TestCase):
         self.assertFalse(page.exception)
         self.assertFalse(page.expander)
 
+    def test_table_support_is_visible_with_the_original_hit_and_same_reference(self):
+        def cell(identifier, text):
+            return {"id": identifier, "text": text, "roles": [],
+                    "spans": [{"page_no": 2, "bbox": [.1, .2, .3, .4]}]}
+        hit = Hit('results.pdf', '35.2', .9, 4, {'doc_type_kwd': 'table', 'table_evidence': {
+            'status': 'complete', 'cells': [cell('value', '35.2'), cell('row', 'Ex3'), cell('head', 'Strength MPa')],
+            'associations': {'value': {'row_header_cell_ids': ['row'], 'column_header_cell_ids': ['head'],
+                                       'unit_cell_ids': ['head']}}, 'related': []}})
+        page = self.page('35.2 MPa [1]', [hit])
+        self.assertFalse(page.exception)
+        texts = [item.value for item in page.expander[0].text]
+        self.assertEqual(texts[0], '35.2')
+        self.assertTrue(any('Ex3' in text and 'Strength MPa' in text and '第 2 页' in text for text in texts))
+        self.assertEqual(hit.text, '35.2')
+
 
 if __name__ == '__main__':
     unittest.main()

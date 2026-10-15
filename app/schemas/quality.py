@@ -16,6 +16,20 @@ class QualityIssue:
     page_no: int | None = None
     element_id: str | None = None
     chunk_id: str | None = None
+    table_id: str | None = None
+    cell_ids: list[str] = field(default_factory=list)
+    source_spans: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class TableQuality:
+    id: str
+    fragment_ids: list[str]
+    cell_ids: list[str]
+    pages: list[int]
+    status: QualityStatus
+    usage: str  # blocked / reference_only / traceable; never an accuracy claim
+    issue_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -38,6 +52,7 @@ class QualityReport:
     chunk_ids: list[str]
     pages: list[PageQuality] = field(default_factory=list)
     issues: list[QualityIssue] = field(default_factory=list)
+    tables: list[TableQuality] = field(default_factory=list)
 
 
 @dataclass

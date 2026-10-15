@@ -76,6 +76,15 @@ backend_config = (
     settings.pdf_image_ocr,
     settings.pdf_ocr_language,
     settings.pdf_ocr_dpi,
+    settings.pdf_table_backend,
+    settings.pdf_table_mode,
+    settings.pdf_table_models_directory,
+    settings.pdf_table_fallback,
+    settings.retrieval_mode,
+    settings.retrieval_candidates,
+    settings.retrieval_rrf_constant,
+    settings.retrieval_vector_weight,
+    settings.retrieval_keyword_weight,
 )
 # 切换模型时连接对应集合，原有集合的数据继续保留。
 if st.session_state.get("backend_config") != backend_config:

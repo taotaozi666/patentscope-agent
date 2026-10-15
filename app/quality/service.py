@@ -20,12 +20,10 @@ def inspect_saved_pdf(directory: str, run_id: str) -> QualityReport:
     # 新记录按预算区分；历史记录没有预算字段时按默认 600 处理。
     # 只检查最后保存的一套配置，不能把不同预算的分块混成一份报告。
     size = int(rows[-1]["metadata"].get("pdf_chunk_size", 600)) if rows else 600
-    def profile(metadata: dict) -> tuple:
-        return (metadata.get("pdf_chunk_size", 600), metadata.get("pdf_target_size", 0),
-                metadata.get("pdf_context_mode", "rule"), metadata.get("pdf_context_model", ""))
-    latest_profile = profile(rows[-1]["metadata"]) if rows else None
+    from app.pdf.profile import chunk_profile
+    latest_profile = chunk_profile(rows[-1]["metadata"]) if rows else None
     chunks = [Document(page_content=row["text"], metadata=row["metadata"]) for row in rows
-              if profile(row["metadata"]) == latest_profile]
+              if chunk_profile(row["metadata"]) == latest_profile]
     report = check_pdf(parsed, chunks, size)
     QualityRepository(directory).save(report)
     return report

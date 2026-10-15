@@ -16,7 +16,7 @@ from openai import RateLimitError
 
 from app.rag.documents import loaders
 from app.rag.embeddings import create_embeddings
-from app.rag import RAGService
+from app.indexing.service import DocumentImportService
 from app.schemas import IngestionJob, Settings
 from app.storage.ingestion_repository import IngestionRepository
 
@@ -173,7 +173,7 @@ class IngestionManager:
             if not path.is_file():
                 raise ValueError("待处理文件不存在，请重新上传")
             embedder = create_embeddings(settings, offline=row["embedding_mode"] == "offline")
-            service = RAGService(embedder, settings=settings)
+            service = DocumentImportService(embedder, settings=settings)
             last_stage, last_progress, last_time = "", -1, 0.0
 
             def progress(stage: str, completed: int, total: int) -> None:

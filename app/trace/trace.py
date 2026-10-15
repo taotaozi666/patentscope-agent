@@ -52,16 +52,20 @@ def configure_logging(level: str = "INFO") -> None:
             logger.addHandler(handler)
 
 
-def print_step(step: str, *, level: int = logging.INFO, **details: object) -> None:
-    """输出摘要；关闭的级别不序列化数据，调用方不得传入密钥。"""
+def _log_step(step: str, level: int, details: dict[str, object]) -> None:
     if _logger.isEnabledFor(level):
         _logger.log(level, step, extra={"operation_id": _operation_id.get(), "details": details})
+
+
+def print_step(step: str, *, level: int = logging.INFO, **details: object) -> None:
+    """输出摘要；关闭的级别不序列化数据，调用方不得传入密钥。"""
+    _log_step(step, level, details)
 
 
 def debug_step(step: str, payload: Callable[[], dict[str, object]]) -> None:
     """仅 DEBUG 开启时构造原文、消息和向量预览等详细数据。"""
     if _logger.isEnabledFor(logging.DEBUG):
-        print_step(step, level=logging.DEBUG, **payload())
+        _log_step(step, logging.DEBUG, payload())
 
 
 @contextmanager
@@ -69,7 +73,7 @@ def trace_operation(name: str, **details: object) -> Iterator[None]:
     """关联步骤并记录耗时，失败只记录异常类型，不输出第三方异常正文。"""
     token = _operation_id.set(uuid4().hex[:8])
     start = perf_counter()
-    print_step(f"{name}开始", **details)
+    _log_step(f"{name}开始", logging.INFO, details)
     try:
         yield
     except Exception as exc:

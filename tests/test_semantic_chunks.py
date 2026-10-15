@@ -74,6 +74,8 @@ class SemanticChunkTests(unittest.TestCase):
         table.payload["rows"][1][1] = "数值说明。" * 30
         cell = next(cell for cell in table.payload["cells"] if cell["row"] == 1 and cell["column"] == 1)
         cell["raw_text"] = table.payload["rows"][1][1]
+        anchor = next(c for f in parsed.table_fragments for c in f.cells if c.id == cell["id"])
+        anchor.raw_text = cell["raw_text"]
         chunks = build_chunks(parsed, size=60)
         cells = [chunk for chunk in chunks if chunk.metadata.get("table_row") == 1 and chunk.metadata.get("table_column") == 1]
         self.assertEqual("".join(chunk.page_content for chunk in cells), cell["raw_text"])
@@ -89,6 +91,8 @@ class SemanticChunkTests(unittest.TestCase):
             self.element("units", "单位：万元", 1, path=table.section_path, bbox=(.1,.18,.8,.19)),
             self.element("note", "注：数据未经审计", 1, path=table.section_path, bbox=(.1,.36,.8,.37)),
         ])
+        from app.pdf.tables.assembly import assemble_tables
+        assemble_tables(parsed)
         chunks = build_chunks(parsed)
         parent = next(parent for parent in parsed.objects if parent.kind == "table")
         self.assertEqual(parent.title,"表1 财务指标")
@@ -101,7 +105,8 @@ class SemanticChunkTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]/".documents/tests"
         root.mkdir(parents=True,exist_ok=True)
         with TemporaryDirectory(dir=root,ignore_cleanup_errors=True) as directory:
-            parsed = parse_pdf("report.pdf", native_fixture())
+            content = native_fixture()
+            parsed = parse_pdf("report.pdf", content)
             settings = Settings(api_key="test",chat_model="fake",embedding_model="fake",pdf_directory=directory,pdf_context_mode="model")
             chunks = build_chunks(parsed)
             raw = [chunk.page_content for chunk in chunks]
@@ -116,7 +121,7 @@ class SemanticChunkTests(unittest.TestCase):
             self.assertEqual([chunk.page_content for chunk in chunks],raw)
             self.assertTrue(all(chunk.metadata["context_method"] == "model" for chunk in chunks))
             repository = PdfRepository(directory)
-            repository.save(parsed,native_fixture(),chunks)
+            repository.save(parsed,content,chunks)
             saved = repository.get_chunk(chunks[0].metadata["pdf_chunk_id"])
             if saved is None:
                 self.fail("索引资产未保存")

@@ -14,11 +14,15 @@ dependencies = [
     "langchain-core>=1.0,<2",
     "langchain-text-splitters>=1.0,<2",
     "langchain-chroma>=1.0,<2",
-    "pymupdf>=1.26,<2"
+    "pymupdf>=1.26,<2",
+    "pillow>=10"
 ]
 
 [project.scripts]
 patentscope-agent = "app.cli:main"
+
+[project.optional-dependencies]
+tables = ["docling>=2.60,<3"]
 
 [build-system]
 requires = ["uv_build>=0.12.10,<0.13.0"]

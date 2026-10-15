@@ -2,16 +2,19 @@
 
 import json
 import re
-import sqlite3
+from .catalog import connect, initialize
 from contextlib import closing
 from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
+from hashlib import sha256
 
 from langchain_core.documents import Document
 
 from app.schemas.pdf import ParsedPdf
+from app.schemas.inspection import PageInspection
 from app.pdf.preview import render_source_region
+from .source_repository import SourceRepository
 
 
 class PdfRepository:
@@ -20,25 +23,29 @@ class PdfRepository:
         self.originals = self.directory / "originals"
         self.originals.mkdir(parents=True, exist_ok=True)
         self.database = self.directory / "catalog.sqlite3"
-        with closing(sqlite3.connect(self.database)) as connection, connection:
-            connection.execute("PRAGMA journal_mode=WAL")
+        with closing(connect(self.database)) as connection, connection:
+            initialize(connection)
             connection.execute("CREATE TABLE IF NOT EXISTS pdf_runs (id TEXT PRIMARY KEY, content_hash TEXT NOT NULL, source TEXT NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL)")
             connection.execute("CREATE TABLE IF NOT EXISTS pdf_chunks (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, payload TEXT NOT NULL)")
             connection.execute("CREATE TABLE IF NOT EXISTS pdf_objects (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, payload TEXT NOT NULL)")
             connection.execute("CREATE TABLE IF NOT EXISTS pdf_contexts (id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
+            connection.execute("CREATE INDEX IF NOT EXISTS pdf_chunks_run ON pdf_chunks(run_id)")
+            connection.execute("CREATE INDEX IF NOT EXISTS pdf_objects_run ON pdf_objects(run_id)")
 
     def save(self, parsed: ParsedPdf, content: bytes, chunks: list[Document]) -> None:
         """解析产物先保存，嵌入失败仍能回看原始来源。"""
-        path = self.originals / f"{parsed.content_hash}.pdf"
-        if not path.exists():
-            temporary = path.with_suffix(f".{uuid4().hex}.tmp")
-            temporary.write_bytes(content)
-            temporary.replace(path)
+        if sha256(content).hexdigest() != parsed.content_hash:
+            raise ValueError("原件内容与解析版本不一致")
+        if not chunks:
+            raise ValueError("解析资产没有可保存的切片")
+        SourceRepository(self.directory).save(content, ".pdf")
         self._save_region_images(parsed, content)
         run_id = str(chunks[0].metadata["pdf_parse_id"])
-        with closing(sqlite3.connect(self.database, timeout=30)) as connection, connection:
+        run_payload = asdict(parsed)
+        run_payload.pop("objects", None)  # Objects have their own table; hydrate on read.
+        with closing(connect(self.database)) as connection, connection:
             connection.execute("INSERT OR IGNORE INTO pdf_runs VALUES (?,?,?,?,?)",
-                               (run_id, parsed.content_hash, parsed.source, json.dumps(asdict(parsed), ensure_ascii=False), "parsed"))
+                               (run_id, parsed.content_hash, parsed.source, json.dumps(run_payload, ensure_ascii=False), "parsed"))
             connection.executemany("INSERT OR IGNORE INTO pdf_chunks VALUES (?,?,?)", [
                 (doc.metadata["pdf_chunk_id"], run_id, json.dumps({"text": doc.page_content,
                  "raw_content": doc.metadata.get("_pdf_raw_content", doc.page_content),
@@ -50,6 +57,30 @@ class PdfRepository:
             ])
             connection.executemany("INSERT OR IGNORE INTO pdf_objects VALUES (?,?,?)",
                                    [(item.id, run_id, json.dumps(asdict(item), ensure_ascii=False)) for item in parsed.objects])
+
+    def save_failed_inspection(self, source: str, content: bytes,
+                               inspections: list[PageInspection], *, page_count: int,
+                               parser_version: str, error: str) -> Path:
+        """解析拒绝仍保存原件和诊断；失败快照不冒充已完成的解析运行。"""
+        content_hash = sha256(content).hexdigest()
+        SourceRepository(self.directory).save(content, ".pdf")
+        snapshot_id = sha256(f"{content_hash}:{source}:{parser_version}".encode()).hexdigest()
+        directory = self.directory / "diagnostics"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{snapshot_id}.json"
+        payload = {"schema_version": 1, "status": "parse_failed", "source": source,
+                   "content_hash": content_hash, "parser_version": parser_version,
+                   "page_count": page_count, "error": error,
+                   "inspected_pages": [item.page_no for item in inspections],
+                   "inspection_complete": {item.page_no for item in inspections} == set(range(1, page_count + 1)),
+                   "page_inspections": [asdict(item) for item in inspections]}
+        temporary = path.with_suffix(f".{uuid4().hex}.tmp")
+        try:
+            temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return path
 
     def _save_region_images(self, parsed: ParsedPdf, content: bytes) -> None:
         regions = self.directory / "regions"
@@ -82,39 +113,63 @@ class PdfRepository:
         path = self.directory / "regions" / f"{image_id}.png"
         return path.read_bytes() if path.is_file() else None
 
-    def get_object(self, object_id: str) -> dict | None:
-        with closing(sqlite3.connect(self.database, timeout=30)) as connection:
-            row = connection.execute("SELECT payload FROM pdf_objects WHERE id=?", (object_id,)).fetchone()
+    def get_object(self, object_id: str, *, run_id: str | None = None) -> dict | None:
+        with closing(connect(self.database)) as connection:
+            if run_id is None:
+                row = connection.execute("SELECT payload FROM pdf_objects WHERE id=?", (object_id,)).fetchone()
+            else:
+                row = connection.execute("SELECT payload FROM pdf_objects WHERE id=? AND run_id=?", (object_id, run_id)).fetchone()
         return json.loads(row[0]) if row else None
 
     def get_context(self, cache_id: str) -> str | None:
-        with closing(sqlite3.connect(self.database, timeout=30)) as connection:
+        with closing(connect(self.database)) as connection:
             row = connection.execute("SELECT payload FROM pdf_contexts WHERE id=?", (cache_id,)).fetchone()
         return str(json.loads(row[0])["text"]) if row else None
 
     def save_context(self, cache_id: str, text: str, model: str, version: str) -> None:
-        with closing(sqlite3.connect(self.database, timeout=30)) as connection, connection:
+        with closing(connect(self.database)) as connection, connection:
             connection.execute("INSERT OR IGNORE INTO pdf_contexts VALUES (?,?)",
                                (cache_id, json.dumps({"text": text, "model": model, "version": version}, ensure_ascii=False)))
 
     def get_chunk(self, chunk_id: str) -> dict | None:
-        with closing(sqlite3.connect(self.database)) as connection:
+        with closing(connect(self.database)) as connection:
             row = connection.execute("SELECT payload FROM pdf_chunks WHERE id=?", (chunk_id,)).fetchone()
         return json.loads(row[0]) if row else None
 
     def get_run(self, run_id: str) -> dict | None:
-        with closing(sqlite3.connect(self.database)) as connection:
+        with closing(connect(self.database)) as connection:
             row = connection.execute("SELECT payload FROM pdf_runs WHERE id=?", (run_id,)).fetchone()
-        return json.loads(row[0]) if row else None
+            if row is None:
+                return None
+            data = json.loads(row[0])
+            if "objects" not in data:
+                objects = connection.execute("SELECT payload FROM pdf_objects WHERE run_id=? ORDER BY rowid", (run_id,)).fetchall()
+                data["objects"] = [json.loads(item[0]) for item in objects]
+        return data
+
+    def get_table_quality(self, run_id: str, chunk_id: str, table_id: str) -> dict:
+        """Current policy for this exact evidence set; human marks cannot erase rules."""
+        from app.quality.checks import RULE_VERSION
+        from .quality_repository import QualityRepository
+        quality = QualityRepository(self.directory)
+        report = quality.for_chunk(run_id, chunk_id)
+        result = {"status": "not_checked", "usage": "reference_only", "manual_review": "pending"}
+        if report is None or report.rule_version != RULE_VERSION:
+            return result
+        table = next((t for t in report.tables if t.id == table_id), None)
+        if table is None:
+            return result
+        from app.quality.tables import table_usage
+        return table_usage(report, table, quality.reviews(report.id))
 
     def list_runs(self) -> list[dict]:
         """文档检查使用解析资产，向量化失败的文档也可查看。"""
-        with closing(sqlite3.connect(self.database, timeout=30)) as connection:
+        with closing(connect(self.database)) as connection:
             rows = connection.execute("SELECT id,source,status,content_hash FROM pdf_runs ORDER BY rowid DESC").fetchall()
         return [dict(zip(("id", "source", "status", "content_hash"), row)) for row in rows]
 
     def list_chunks(self, run_id: str) -> list[dict]:
-        with closing(sqlite3.connect(self.database, timeout=30)) as connection:
+        with closing(connect(self.database)) as connection:
             rows = connection.execute("SELECT payload FROM pdf_chunks WHERE run_id=? ORDER BY rowid", (run_id,)).fetchall()
         return [json.loads(row[0]) for row in rows]
 
@@ -124,5 +179,5 @@ class PdfRepository:
         return (self.originals / f"{content_hash}.pdf").read_bytes()
 
     def mark_indexed(self, run_id: str) -> None:
-        with closing(sqlite3.connect(self.database)) as connection, connection:
+        with closing(connect(self.database)) as connection, connection:
             connection.execute("UPDATE pdf_runs SET status='indexed' WHERE id=?", (run_id,))
